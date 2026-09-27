@@ -1,0 +1,18 @@
+# Ignorar todos os arquivos CSV (evita subir os 5 GB)
+*.csv
+**/*.csv
+base/*.csv
+
+# Ignorar caches do Python e ambientes virtuais
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# Ignorar arquivos do sistema operacional
+Thumbs.db
+Desktop.ini
+.DS_Store
