@@ -1,0 +1,14 @@
+Seleção de colunas - Base de dados do grupo de tensões
+
+[MUN]*
+[GRU_TEN]*
+[GRU_TAR]*
+[AT]*
+[RD_INTERLIG]*
+[SIT_ATIV]*
+[ENE_01] a [ENE_12]* - Medida em kWh - Energia ativa medida consumida na ponta(em kWh)
+[DEM_01] a [DEM_12] - Medida em kW - Demanda ativa máxima aferida na ponta(em kW)
+[CODGD]* - Código Único de Instalações de Geração Distribuída, exigida caso a unidade possua mini/microgeração
+[POINT_X]*
+[POINT_Y]*
+
