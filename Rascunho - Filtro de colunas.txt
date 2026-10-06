@@ -1,4 +1,4 @@
-Seleção de colunas - Base de dados do grupo de tensões
+Rascunho de filtro de colunas - Base de dados do grupo de tensões
 
 [MUN]*
 [GRU_TEN]*

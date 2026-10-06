@@ -3,7 +3,7 @@ import polars as pl
 
 # 1. Configurações de Caminho
 BASE_DIR = Path(r"C:\Users\LUCAS\OneDrive\Área de Trabalho\TCC_projeto\base")
-ARQUIVO_MEDIA = BASE_DIR / "media_tensao.parquet"
+ARQUIVO_MEDIA = BASE_DIR / "baixa_tensao.parquet"
 
 def carregar_dados(caminho: Path) -> pl.DataFrame:
     """Carrega o arquivo Parquet com verificação de existência."""

@@ -1,0 +1,28 @@
+Algoritmos de ML a serem utilizados:
+
+Abordagem
+
+- Gradient Tree Boosting*
+	- LightGBM, XGBoost, CatBoost
+		- Melhor desempenho geral em dados tabulares, lido com não linearidade e interações complexas de forma nativa
+		- Coordenadas puras(lat e long) geram divisões ortogonais (emrade/retângulo); exige engenharia de features espaciais.
+
+- Modelos Estatísticos Espaciais
+	- GWR(Geographically Weghted Regression) / MGWR
+		- Modelo coeficente locais variando geograficamente
+		- Alta explicabilidade sobre a influência no consumo
+		- Alto custo computacional para bases volumosas e sensível para	multicolinearidade local.
+
+- Random Forest Espacial*	
+	- Spatia RF / Random Forest padrão
+		- Robusto a ruído e outliers de consumo
+		- calcula importância de features com facilidade
+		- Dificuldade de extrapolar o consumo fora dos limites observados no treino
+
+- Processos Gaussianos*
+	- Kringing com Regressão
+		- Fornece estimativas probabilísticas(Intervalo de confiança de predição por localidade)
+		- Inviável para bases com dezenas ou centenas de milhares de unidades sem aproximações		
+
+
+Método de validação cruzada espacial: Spatial Block Cross-Validation: Dividir o território em blocos geográficos(ex.: baicas, municípios ou clusters via K-means nas coordenadas). Garanta que regiões inteiras fiquem no ocnjunto de validação para medir a real capacidade do modelo de generalizar para novas localidades
