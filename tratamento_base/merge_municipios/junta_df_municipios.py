@@ -30,8 +30,8 @@ def enriquecer_base_com_municipios(
     df_municipios: pl.DataFrame,
     nome_saida_parquet: str
 ):
-    caminho_tensao = BASE_DIR / nome_arquivo_tensao
-    caminho_saida = BASE_DIR / nome_saida_parquet
+    caminho_tensao = BASE_DIR / "filtrados" / nome_arquivo_tensao
+    caminho_saida = BASE_DIR / "filtrados" / nome_saida_parquet
 
     print("\n" + "=" * 75)
     print(f"ENRIQUECENDO BASE: {nome_arquivo_tensao}")

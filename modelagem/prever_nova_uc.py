@@ -29,6 +29,24 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 RESULTADOS_DIR = PROJECT_DIR / "modelagem" / "resultados"
 ARQUIVO_PREVISOES = RESULTADOS_DIR / "previsoes_regionais_municipios.csv"
 
+# Código IBGE da UF -> sigla (a coluna UF das bases BDGD vem com o código numérico)
+SIGLAS_UF = {
+    11: "RO", 12: "AC", 13: "AM", 14: "RR", 15: "PA", 16: "AP", 17: "TO",
+    21: "MA", 22: "PI", 23: "CE", 24: "RN", 25: "PB", 26: "PE", 27: "AL", 28: "SE", 29: "BA",
+    31: "MG", 32: "ES", 33: "RJ", 35: "SP",
+    41: "PR", 42: "SC", 43: "RS",
+    50: "MS", 51: "MT", 52: "GO", 53: "DF",
+}
+
+def sigla_uf(valor) -> str:
+    """Converte o código IBGE da UF em sigla; mantém o valor se já for uma sigla."""
+    if pd.isna(valor):
+        return "N/D"
+    try:
+        return SIGLAS_UF.get(int(float(valor)), str(valor))
+    except (TypeError, ValueError):
+        return str(valor).strip().upper()
+
 def carregar_base_previsoes() -> pd.DataFrame:
     if not ARQUIVO_PREVISOES.exists():
         print("=" * 70)
@@ -40,19 +58,24 @@ def carregar_base_previsoes() -> pd.DataFrame:
         sys.exit(1)
 
     df = pd.read_csv(ARQUIVO_PREVISOES, sep=";", decimal=",")
+    df["UF"] = df["UF"].map(sigla_uf)
     return df
 
+def numero_br(valor: float, casas: int = 0) -> str:
+    """Formata no padrão brasileiro: ponto como separador de milhar e vírgula decimal."""
+    return f"{valor:,.{casas}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
 def formatar_energia(kwh: float) -> str:
-    if pd.isna(kwh) or kwh is None:
+    if kwh is None or pd.isna(kwh):
         return "N/D"
     v = abs(kwh)
     if v >= 1e9:
-        return f"{kwh / 1e9:,.2f} TWh/ano".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"{numero_br(kwh / 1e9, 2)} TWh/ano"
     if v >= 1e6:
-        return f"{kwh / 1e6:,.2f} GWh/ano".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"{numero_br(kwh / 1e6, 2)} GWh/ano"
     if v >= 1e3:
-        return f"{kwh / 1e3:,.1f} MWh/ano".replace(",", "X").replace(".", ",").replace("X", ".")
-    return f"{kwh:,.0f} kWh/ano".replace(",", ".")
+        return f"{numero_br(kwh / 1e3, 1)} MWh/ano"
+    return f"{numero_br(kwh)} kWh/ano"
 
 def buscar_por_coordenadas(df: pd.DataFrame, lat: float, lon: float) -> pd.Series:
     # Distância Euclidiana aproximada ponderada em km
@@ -70,10 +93,10 @@ def exibir_relatorio_regiao(res: pd.Series):
     print("=" * 75)
 
     if "DIST_CONSULTA_KM" in res:
-        print(f"• Município de referência mais próximo: {res['NOME_MUNICIPIO']} (a ~{res['DIST_CONSULTA_KM']:.1f} km)")
+        print(f"• Município de referência mais próximo: {res['NOME_MUNICIPIO']} (a ~{numero_br(res['DIST_CONSULTA_KM'], 1)} km)")
     print(f"• Código IBGE (MUN) : {res.get('MUN', 'N/D')}")
     print(f"• Coordenadas centrais: Lat {res.get('LAT', 0):.4f}, Lon {res.get('LON', 0):.4f}")
-    print(f"• Unidades Consumidoras ativas na base: {int(res.get('N_UC', 0)):,} UCs".replace(",", "."))
+    print(f"• Unidades Consumidoras ativas na base: {numero_br(int(res.get('N_UC', 0)))} UCs")
     print(f"• Consumo Total Histórico do Município: {formatar_energia(res.get('ENE_TOTAL_kWh', 0))}")
     print(f"• Consumo Médio por UC existente     : {formatar_energia(res.get('ENE_MEDIA_UC_kWh', 0))}")
 
@@ -83,7 +106,7 @@ def exibir_relatorio_regiao(res: pd.Series):
     esp = res.get("CONSUMO_PREV_NOVA_UC_ESPERADO_kWh", np.nan)
     print(f"• Consumo Anual Esperado (Geral Ponderado): {formatar_energia(esp)}")
     if not pd.isna(esp):
-        print(f"  (equivalente a uma média de ~{esp / 12:,.1f} kWh/mês)".replace(",", "."))
+        print(f"  (equivalente a uma média de ~{numero_br(esp / 12, 1)} kWh/mês)")
 
     # Detalhamento por classe de tensão
     cols_prev_uc = [c for c in res.index if c.startswith("CONSUMO_PREV_NOVA_UC_") and c.endswith("_kWh") and "ESPERADO" not in c]
@@ -92,7 +115,7 @@ def exibir_relatorio_regiao(res: pd.Series):
         for c in cols_prev_uc:
             grupo = c.replace("CONSUMO_PREV_NOVA_UC_", "").replace("_kWh", "")
             val = res[c]
-            print(f"    - Grupo {grupo:<4}: {formatar_energia(val)} (~{val/12:,.0f} kWh/mês)".replace(",", "."))
+            print(f"    - Grupo {grupo:<4}: {formatar_energia(val)} (~{numero_br(val / 12)} kWh/mês)")
 
     print("\n" + "-" * 75)
     print(" 2) DISTRIBUIÇÃO PREVISTA DE GRUPOS DE TENSÃO (GRU_TEN)")
@@ -104,7 +127,7 @@ def exibir_relatorio_regiao(res: pd.Series):
             prob = res[c] * 100
             obs = res.get(f"PCT_OBS_{grupo}", np.nan) * 100
             barra = "█" * int(round(prob / 4))
-            print(f"  • Grupo {grupo:<4}: {prob:5.1f}%  {barra:<25} (histórico local: {obs:5.1f}%)")
+            print(f"  • Grupo {grupo:<4}: {numero_br(prob, 1):>5}%  {barra:<25} (histórico local: {numero_br(obs, 1):>5}%)")
     else:
         print("  Informações de probabilidade por classe não encontradas no arquivo.")
 
@@ -118,12 +141,12 @@ def exibir_relatorio_regiao(res: pd.Series):
 
     print(f"• Classificação Estratégica: [{quad.upper()}]")
     if not pd.isna(idx_exp):
-        print(f"• Índice de Expansão Regional: {idx_exp * 100:.1f}% (percentil em relação aos demais municípios)")
+        print(f"• Índice de Expansão Regional: {numero_br(idx_exp * 100, 1)}% (percentil em relação aos demais municípios)")
     if not pd.isna(pct_cons):
-        print(f"• Nível de Consumo Relativo : {pct_cons * 100:.1f}% (percentil nacional)")
+        print(f"• Nível de Consumo Relativo : {numero_br(pct_cons * 100, 1)}% (percentil nacional)")
     if not pd.isna(tend_mes):
         sinal = "+" if tend_mes > 0 else ""
-        print(f"• Tendência Linear Mensal   : {sinal}{tend_mes:.2f}% ao mês ao longo do ano")
+        print(f"• Tendência Linear Mensal   : {sinal}{numero_br(tend_mes, 2)}% ao mês ao longo do ano")
 
     # Interpretação
     print("\nInterpretação para o TCC/Planejamento:")

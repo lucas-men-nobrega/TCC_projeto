@@ -79,9 +79,10 @@ except ImportError:
     cb = None
 try:
     from mgwr.gwr import GWR, MGWR
+    from mgwr.kernels import Kernel
     from mgwr.sel_bw import Sel_BW
 except ImportError:
-    GWR = MGWR = Sel_BW = None
+    GWR = MGWR = Sel_BW = Kernel = None
 
 # --------------------------------------------------------------------------- #
 # Configuração
@@ -173,8 +174,13 @@ def _lazy_fonte(sigla: str, caminho: Path, incluir_inativas: bool) -> tuple[pl.L
     lat = _num("POINT_Y", schema["POINT_Y"]) if "POINT_Y" in nomes else pl.lit(None, pl.Float64)
 
     tem_dat = "DAT_CON" in nomes
-    ano = (pl.col("DAT_CON").cast(pl.Utf8).str.slice(0, 4).cast(pl.Int32, strict=False)
-           if tem_dat else pl.lit(None, pl.Int32))
+    # Ano de 4 dígitos em qualquer posição: cobre "dd/mm/aaaa" (BDGD) e "aaaa-mm-dd"
+    if not tem_dat:
+        ano = pl.lit(None, pl.Int32)
+    elif schema["DAT_CON"].is_temporal():
+        ano = pl.col("DAT_CON").dt.year().cast(pl.Int32)
+    else:
+        ano = pl.col("DAT_CON").cast(pl.Utf8).str.extract(r"(\d{4})", 1).cast(pl.Int32, strict=False)
 
     q = q.select(
         pl.lit(sigla).alias("FONTE"), *[txt(c) for c in COLS_TEXTO],
@@ -331,7 +337,8 @@ class ConstrutorFeatures:
 
         F = pd.DataFrame(out, index=df.index)
         for c in self.cats:
-            F[c] = pd.Categorical(df[c].astype(str), categories=self.niveis[c])
+            v = df[c].astype(str)
+            F[c] = pd.Categorical(v.where(v.isin(self.niveis[c])), categories=self.niveis[c])
         return F
 
     @property
@@ -404,9 +411,6 @@ class GWRModelo:
     def __init__(self, covars: list[str], n_max: int, seed: int):
         self.covars, self.n_max, self.rng = covars, n_max, np.random.default_rng(seed)
 
-    def _gwr(self):
-        return GWR(self.coords, self.y, self.Z, self.bw, kernel="bisquare", fixed=False, spherical=True)
-
     def fit(self, X, y, sample_weight=None):
         idx = _indices_por_peso(len(X), self.n_max, sample_weight, self.rng)
         Xs = X.iloc[idx]
@@ -416,18 +420,22 @@ class GWRModelo:
         self.y = np.asarray(y, float)[idx].reshape(-1, 1)
         self.bw = Sel_BW(self.coords, self.y, self.Z, kernel="bisquare", fixed=False,
                          spherical=True).search(criterion="AICc")
-        self.res = self._gwr().fit()
         return self
 
-    def predict(self, X, bloco: int = 2000):
+    def predict(self, X):
+        """Coeficientes locais por mínimos quadrados ponderados em cada ponto previsto.
+        (GWR.predict do mgwr 2.2.1 indexa a matriz de treino pelo índice do ponto previsto
+        e falha quando há mais pontos previstos que de treino.)"""
         pts = X[["LON", "LAT"]].to_numpy(float)
-        P = self.sc.transform(X[self.covars])
-        out = []
-        for i in range(0, len(pts), bloco):
-            r = self._gwr().predict(pts[i:i + bloco], P[i:i + bloco],
-                                    exog_scale=self.res.scale, exog_resid=self.res.resid_response)
-            out.append(np.asarray(r.predictions).ravel())
-        return np.concatenate(out)
+        P = np.c_[np.ones(len(pts)), self.sc.transform(X[self.covars])]
+        Xtr = np.c_[np.ones(len(self.Z)), self.Z]
+        out = np.empty(len(pts))
+        for i in range(len(pts)):
+            sw = np.sqrt(Kernel(i, self.coords, self.bw, fixed=False, function="bisquare",
+                                points=pts, spherical=True).kernel).reshape(-1, 1)
+            beta = np.linalg.lstsq(Xtr * sw, self.y * sw, rcond=None)[0]
+            out[i] = P[i] @ beta.ravel()
+        return out
 
 
 class RegressaoKrigagem:
@@ -517,17 +525,17 @@ def especificacoes(tarefa: str, args, n_cls: int = 0) -> list[Espec]:
         par = dict(n_estimators=nt, learning_rate=0.05, num_leaves=63, min_child_samples=30,
                    subsample=0.8, subsample_freq=1, colsample_bytree=0.8, n_jobs=-1, verbose=-1, random_state=s)
         E.append(Espec("LightGBM (feat. espaciais)", "Gradient Boosting", cols_espacial, "category",
-                       lambda: wrap(lgb.LGBMRegressor(**par) if reg else lgb.LGBMClassifier(**par))))
+                       lambda par=par: wrap(lgb.LGBMRegressor(**par) if reg else lgb.LGBMClassifier(**par))))
     if xgb:
         par = dict(n_estimators=nt, learning_rate=0.05, max_depth=8, subsample=0.8, colsample_bytree=0.8,
                    tree_method="hist", enable_categorical=True, n_jobs=-1, random_state=s)
         E.append(Espec("XGBoost (feat. espaciais)", "Gradient Boosting", cols_espacial, "category",
-                       lambda: wrap(xgb.XGBRegressor(**par) if reg else
+                       lambda par=par: wrap(xgb.XGBRegressor(**par) if reg else
                                     xgb.XGBClassifier(objective="multi:softprob", **par))))
     if cb:
         par = dict(iterations=nt, learning_rate=0.08, depth=8, verbose=0, random_seed=s, thread_count=-1)
         E.append(Espec("CatBoost (feat. espaciais)", "Gradient Boosting", cols_espacial, "str",
-                       lambda: wrap(cb.CatBoostRegressor(**par) if reg else
+                       lambda par=par: wrap(cb.CatBoostRegressor(**par) if reg else
                                     cb.CatBoostClassifier(loss_function="MultiClass", **par))))
 
     par_rf = dict(n_estimators=max(100, nt // 2), min_samples_leaf=5, max_features=0.5,
@@ -561,7 +569,7 @@ def preparar_X(F: pd.DataFrame, cols: list[str], cat: str, cats: list[str]) -> p
     if cat == "onehot" and cc:
         X = pd.get_dummies(X, columns=cc, dtype=np.float32)
     elif cat == "str" and cc:
-        X[cc] = X[cc].astype(str)
+        X[cc] = X[cc].astype(object).fillna(NA).astype(str)
     elif cat == "none" and cc:
         X = X.drop(columns=cc)
     return X

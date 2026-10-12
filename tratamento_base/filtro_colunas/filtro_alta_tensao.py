@@ -3,17 +3,21 @@ import polars as pl
 
 # 1. Configuração de Diretórios
 BASE_DIR = Path(r"C:\Users\LUCAS\OneDrive\Área de Trabalho\TCC_projeto\base")
-ARQUIVO_ORIGEM = BASE_DIR / "alta_tensao.parquet"
-ARQUIVO_DESTINO = BASE_DIR / "alta_tensao_filtrada.parquet"
+ARQUIVO_ORIGEM = BASE_DIR / "raw" / "alta_tensao.parquet"
+ARQUIVO_DESTINO = BASE_DIR / "filtrados" / "alta_tensao_filtrada.parquet"
 
 # 2. Definição das colunas solicitadas
 COLUNAS_ENERGIA_P = [f"ENE_P_{i:02d}" for i in range(1, 13)]
+COLUNAS_ENERGIA_F = [f"ENE_F_{i:02d}" for i in range(1, 13)]
 
 COLUNAS_ALVO = [
     "MUN",
     "GRU_TEN",
+    "GRU_TAR",
     "SIT_ATIV",
+    "DAT_CON",
     *COLUNAS_ENERGIA_P,
+    *COLUNAS_ENERGIA_F,
     "POINT_X",
     "POINT_Y"
 ]
