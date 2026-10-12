@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Painel de Consumo Energético · BDGD/ANEEL</title>
+  <meta name="description" content="Dashboard interativo do consumo anual de energia (kWh) das unidades consumidoras de alta, média e baixa tensão no Brasil, com filtros por estado, município, grupo de tensão e grupo tarifário." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg>
+      </div>
+      <div>
+        <h1>Painel de Consumo Energético</h1>
+        <p>Unidades consumidoras · BDGD / ANEEL · energia anual (ENE_01 → ENE_12)</p>
+      </div>
+    </div>
+    <div class="status" id="status-pill"><span class="dot"></span><span id="status-text">Conectando…</span></div>
+  </header>
+
+  <div class="layout">
+    <!-- ============ FILTROS ============ -->
+    <aside class="sidebar glass" id="sidebar">
+      <div class="side-head">
+        <h2>Filtros</h2>
+        <button class="btn-ghost" id="btn-reset" type="button">Limpar</button>
+      </div>
+
+      <section class="filter">
+        <label class="filter-label">Base / nível de tensão</label>
+        <div class="chips" id="chips-fonte"></div>
+      </section>
+
+      <section class="filter">
+        <label class="filter-label" for="sel-uf">Estado</label>
+        <div class="select-wrap">
+          <select id="sel-uf"><option value="">Todos os estados</option></select>
+        </div>
+      </section>
+
+      <section class="filter">
+        <label class="filter-label" for="inp-mun">Município</label>
+        <div class="search-wrap">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="inp-mun" list="lista-mun" placeholder="Digite para buscar…" autocomplete="off" />
+          <button type="button" class="clear" id="btn-clear-mun" title="Limpar município">×</button>
+          <datalist id="lista-mun"></datalist>
+        </div>
+      </section>
+
+      <section class="filter">
+        <div class="filter-row">
+          <label class="filter-label">Grupo de tensão <code>GRU_TEN</code></label>
+          <button class="link" type="button" data-toggle-all="gru_ten">todos</button>
+        </div>
+        <div class="chips" id="chips-gru_ten"></div>
+      </section>
+
+      <section class="filter">
+        <div class="filter-row">
+          <label class="filter-label">Grupo tarifário <code>GRU_TAR</code></label>
+          <button class="link" type="button" data-toggle-all="gru_tar">todos</button>
+        </div>
+        <div class="chips" id="chips-gru_tar"></div>
+      </section>
+
+      <section class="legend">
+        <h3>Legenda</h3>
+        <div class="legend-bubbles" id="legend-bubbles"></div>
+        <div class="legend-bar"><span>menor</span><div class="grad"></div><span>maior</span></div>
+        <p class="legend-note" id="legend-note">Área da bolha proporcional ao consumo anual agregado.</p>
+      </section>
+    </aside>
+
+    <!-- ============ CONTEÚDO ============ -->
+    <main class="content">
+      <section class="kpis">
+        <article class="kpi glass">
+          <span class="kpi-label">Energia anual consumida</span>
+          <strong class="kpi-value" id="kpi-energia">—</strong>
+          <span class="kpi-sub" id="kpi-energia-sub">soma ENE_01 a ENE_12</span>
+        </article>
+        <article class="kpi glass">
+          <span class="kpi-label">Unidades consumidoras</span>
+          <strong class="kpi-value" id="kpi-ucs">—</strong>
+          <span class="kpi-sub" id="kpi-ucs-sub">&nbsp;</span>
+        </article>
+        <article class="kpi glass">
+          <span class="kpi-label">Municípios</span>
+          <strong class="kpi-value" id="kpi-mun">—</strong>
+          <span class="kpi-sub">com UCs no filtro</span>
+        </article>
+        <article class="kpi glass">
+          <span class="kpi-label">Consumo médio por UC</span>
+          <strong class="kpi-value" id="kpi-media">—</strong>
+          <span class="kpi-sub">por ano</span>
+        </article>
+      </section>
+
+      <section class="main-grid">
+        <div class="map-card glass">
+          <div id="map" role="region" aria-label="Mapa de consumo de energia"></div>
+          <div class="map-overlay" id="map-loading"><div class="spinner"></div></div>
+          <div class="map-info" id="map-info"></div>
+        </div>
+
+        <div class="charts">
+          <article class="chart-card glass">
+            <h3>Energia por grupo tarifário</h3>
+            <div class="chart-box"><canvas id="chart-tar"></canvas></div>
+          </article>
+          <article class="chart-card glass">
+            <h3>Energia por grupo de tensão</h3>
+            <div class="chart-box donut"><canvas id="chart-ten"></canvas></div>
+          </article>
+          <article class="chart-card glass">
+            <h3>Top 10 municípios</h3>
+            <ol class="ranking" id="ranking"></ol>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="alert"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

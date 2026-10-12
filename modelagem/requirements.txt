@@ -1,0 +1,23 @@
+# Dependências para a pasta modelagem (comparação de ML e previsões espaciais)
+
+# Manipulação de dados e I/O de alta performance
+polars>=0.20.0
+pandas>=2.0.0
+pyarrow>=14.0.0
+numpy>=1.24.0
+
+# Machine Learning padrão e spatial clustering / k-NN
+scikit-learn>=1.3.0
+scipy>=1.11.0
+
+# Gradient Tree Boosting (opcionais, mas fortemente recomendados)
+lightgbm>=4.1.0
+xgboost>=2.0.0
+catboost>=1.2.0
+
+# Modelagem Estatística Espacial (GWR e MGWR)
+mgwr>=2.1.2
+
+# Visualização e gráficos dos resultados
+matplotlib>=3.7.0
+seaborn>=0.12.0

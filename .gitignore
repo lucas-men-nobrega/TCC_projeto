@@ -16,3 +16,6 @@ env/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Cache agregado gerado pelo painel (dashboard/server.py)
+dashboard/cache/
