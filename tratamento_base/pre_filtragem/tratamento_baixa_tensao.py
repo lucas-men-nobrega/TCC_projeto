@@ -3,7 +3,7 @@ import polars as pl
 
 BASE_DIR = Path(r"C:\Users\LUCAS\OneDrive\Área de Trabalho\TCC_projeto\base")
 ARQUIVO_UTF8 = BASE_DIR / "baixa_tensao_utf8.csv"
-ARQUIVO_PARQUET = BASE_DIR / "baixa_tensao.parquet"
+ARQUIVO_PARQUET = BASE_DIR / "raw" / "baixa_tensao.parquet"
 
 print("Iniciando a leitura do CSV em UTF-8...")
 

@@ -3,7 +3,7 @@ import polars as pl
 
 BASE_DIR = Path(r"C:\Users\LUCAS\OneDrive\Área de Trabalho\TCC_projeto\base")
 ARQUIVO_CSV = BASE_DIR / "ucat_pj.csv"
-ARQUIVO_PARQUET = BASE_DIR / "alta_tensao.parquet"
+ARQUIVO_PARQUET = BASE_DIR / "raw" / "alta_tensao.parquet"
 
 print("--- ALTA TENSÃO ---")
 print(f"Lendo CSV: {ARQUIVO_CSV.name}...")

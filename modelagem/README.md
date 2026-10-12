@@ -1,6 +1,26 @@
 # ⚡ Modelagem de Machine Learning e Análise Espacial (BDGD / ANEEL)
 
-Este módulo implementa o pipeline comparativo e preditivo de Machine Learning desenhado para responder às hipóteses de pesquisa e aos requisitos do arquivo [`Procurando algoritmos ML.txt`](file:///c:/Users/LUCAS/OneDrive/%C3%81rea%20de%20Trabalho/TCC_projeto/Procurando%20algoritmos%20ML.txt).
+Este módulo implementa o pipeline comparativo e preditivo de Machine Learning desenhado para responder às hipóteses de pesquisa e aos requisitos do arquivo [`Procurando algoritmos ML.txt`](../Procurando%20algoritmos%20ML.txt).
+
+> Visão geral do projeto, dicionário de dados, legendas dos códigos da BDGD e conclusões: veja o [README principal](../README.md).
+
+---
+
+## 📥 Dados de Entrada
+
+O script lê `base/filtrados/{alta,media,baixa}_tensao_municipios.parquet` e usa:
+
+| Coluna | Uso |
+| :--- | :--- |
+| `ENE_01..12` (MT/BT) ou `ENE_P_xx + ENE_F_xx` (AT) | Consumo anual da UC (kWh) — alvo da Tarefa 1 |
+| `GRU_TEN` | Feature da Tarefa 1, alvo da Tarefa 2 e estrato da amostragem |
+| `GRU_TAR` | Feature da Tarefa 1 (categórica + *target encoding*) |
+| `POINT_X`, `POINT_Y` | Longitude e latitude (fora do retângulo do Brasil = descartada) |
+| `SIT_ATIV` | Filtro: só UCs ativas (`AT`), salvo com `--incluir-inativas` |
+| `DAT_CON` | Ano de conexão (formato BDGD `DD/MM/AAAA`) → índice de expansão |
+| `MUN`, `UF`, `NOME_MUNICIPIO` | Agregação por município e blocos da validação cruzada |
+
+UCs sem coordenada válida, com consumo anual zero ou com `GRU_TEN` ausente ficam fora do treino, mas entram nas estatísticas por município (calculadas sobre a base completa).
 
 ---
 
@@ -121,3 +141,38 @@ Ao final do processamento, os seguintes arquivos são gravados:
 | `comparacao_modelos.png` | Gráfico comparativo de barras com intervalos de erro por modelo. |
 | `consumo_x_expansao.png` | Gráfico de dispersão dos quadrantes energéticos dos municípios brasileiros. |
 | `relatorio.md` | Relatório executivo sintetizando os principais achados. |
+
+---
+
+## 📈 Índice de Expansão e Quadrantes
+
+Para cada município com ao menos `--min-uc` UCs (padrão 30):
+
+* **Taxa de conexões recentes** = UCs com `DAT_CON` nos últimos `--janela-expansao` anos (padrão 3) ÷ UCs com data válida.
+* **Crescimento entre janelas** = (conexões na janela recente + 1) ÷ (conexões na janela anterior + 1).
+* **`INDICE_EXPANSAO`** = média dos percentis dessas duas medidas. Se `DAT_CON` não existir, o script usa como *proxy* a tendência linear do consumo mensal (`ENE_01 → ENE_12`), que é sensível à sazonalidade.
+* **`QUADRANTE`** = corte no percentil 80 do consumo total e do índice de expansão (legenda no [README principal](../README.md#legenda--quadrante-classificação-dos-municípios)).
+
+> ⚠️ Em algumas distribuidoras, `DAT_CON` parece ter sido recadastrada (AP: 96% e PI: 84% das UCs aparecem conectadas nos últimos 3 anos, contra 12% no Brasil). Isso infla o índice desses estados.
+
+---
+
+## 🏁 Resultados da Execução Rápida (`--rapido`)
+
+Amostra de 32.042 UCs, 3 folds espaciais em 30 blocos K-means, 150 árvores, 9,3 min. As tabelas completas estão em [`resultados/relatorio.md`](resultados/relatorio.md) e a discussão no [README principal](../README.md#-resultados).
+
+| Tarefa | Melhor modelo | Métrica | Baseline kNN |
+| :--- | :--- | :--- | :--- |
+| 1 — Consumo de nova UC | CatBoost (feat. espaciais) | RMSE log 1,816 · R² log 0,138 | RMSE log 2,101 |
+| 2 — Distribuição de `GRU_TEN` | GP classificador (RBF) | Log-loss 0,200 · TVD 0,094 | Log-loss 0,258 · TVD 0,097 |
+
+---
+
+## 🔩 Notas de Implementação
+
+Correções feitas após a primeira execução de teste. Todas foram verificadas na segunda execução, que terminou sem falhas:
+
+* **Parâmetros por modelo:** cada `lambda` da fábrica de modelos captura o próprio dicionário de parâmetros (`lambda par=par: ...`). Antes, LightGBM e XGBoost recebiam os parâmetros do CatBoost.
+* **Categorias não vistas no treino:** valores de `GRU_TAR` ausentes no fold de treino viram `NaN` no `Categorical` e, para o CatBoost, são convertidos para `"N/D"`.
+* **Previsão do GWR:** o `GWR.predict` do `mgwr` 2.2.1 indexa a matriz de treino pelo índice do ponto previsto e falha quando há mais pontos previstos que de treino. A previsão é feita por mínimos quadrados ponderados locais (kernel bisquare adaptativo do próprio `mgwr`). Nos pontos de treino, ela coincide com o `mgwr` até 2,7 × 10⁻¹⁵.
+* **Ano de conexão:** o ano é extraído como o primeiro grupo de 4 dígitos de `DAT_CON`, o que aceita `DD/MM/AAAA` (BDGD) e `AAAA-MM-DD`.

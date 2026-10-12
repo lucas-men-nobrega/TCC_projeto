@@ -34,13 +34,16 @@
   const fmtInt = (n) => nf0.format(n || 0);
   const fmtCompact = (n) => new Intl.NumberFormat("pt-BR", { notation: "compact", maximumFractionDigits: 1 }).format(n || 0);
 
-  function heatColor(t) {
+  function heatRGB(t) {
     t = Math.max(0, Math.min(1, t));
     const pos = t * (HEAT.length - 1);
     const i = Math.min(Math.floor(pos), HEAT.length - 2);
     const f = pos - i;
     const a = hex(HEAT[i]), b = hex(HEAT[i + 1]);
-    const c = a.map((v, k) => Math.round(v + (b[k] - v) * f));
+    return a.map((v, k) => Math.round(v + (b[k] - v) * f));
+  }
+  function heatColor(t) {
+    const c = heatRGB(t);
     return `rgb(${c[0]},${c[1]},${c[2]})`;
   }
   const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -119,36 +122,111 @@
   basemaps["Escuro (Esri)"].addTo(map);
   L.control.layers(basemaps, null, { position: "topright", collapsed: true }).addTo(map);
 
-  const renderer = L.canvas({ padding: 0.3 });
-  const camada = L.layerGroup().addTo(map);
+  /* Camada de bolhas desenhada num único <canvas>: milhares de círculos por quadro,
+     sem criar um objeto Leaflet (e um tooltip) por bolha. O hover é resolvido por
+     teste de distância sobre as posições projetadas. */
+  const PAD = 0.3;                                       // margem desenhada fora da tela (arrasto)
+  const LUT = Array.from({ length: 101 }, (_, i) => heatRGB(i / 100));  // cores pré-calculadas
+
+  const CamadaBolhas = L.Layer.extend({
+    onAdd(m) {
+      this._pts = [];
+      this._xy = new Float64Array(0);                    // x, y, raio (coordenadas de layer)
+      this._canvas = L.DomUtil.create("canvas", "camada-bolhas leaflet-zoom-hide");
+      m.getPane("overlayPane").appendChild(this._canvas);
+      this._tip = L.tooltip({ className: "tt", direction: "top", offset: [0, -4] });
+      this._hit = -1;
+      m.on("moveend resize", this._desenhar, this);
+      m.on("mousemove", this._aoMover, this);
+      m.on("mouseout zoomstart", this._limparHover, this);
+      this._desenhar();
+    },
+    onRemove(m) {
+      this._canvas.remove();
+      m.off("moveend resize", this._desenhar, this);
+      m.off("mousemove", this._aoMover, this);
+      m.off("mouseout zoomstart", this._limparHover, this);
+      this._limparHover();
+    },
+    setDados(pts) {
+      this._pts = pts;
+      this._limparHover();
+      this._desenhar();
+    },
+    _desenhar() {
+      const m = this._map, cv = this._canvas;
+      const tam = m.getSize().multiplyBy(1 + 2 * PAD);
+      const origem = m.containerPointToLayerPoint(m.getSize().multiplyBy(-PAD)).round();
+      const dpr = window.devicePixelRatio || 1;
+      L.DomUtil.setPosition(cv, origem);
+      cv.width = Math.round(tam.x * dpr);
+      cv.height = Math.round(tam.y * dpr);
+      cv.style.width = `${tam.x}px`;
+      cv.style.height = `${tam.y}px`;
+      const ctx = cv.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, tam.x, tam.y);
+
+      const pts = this._pts;
+      const xy = (this._xy = new Float64Array(pts.length * 3));
+      if (!pts.length) return;
+      const maxE = pts[0][2] || 1;                       // servidor envia em ordem decrescente
+      ctx.lineWidth = 1;
+      // Maiores primeiro → as menores ficam por cima e continuam visíveis
+      for (let i = 0; i < pts.length; i++) {
+        const [lat, lon, ene] = pts[i];
+        const t = Math.sqrt(Math.max(ene, 0) / maxE);     // raiz -> área ∝ energia
+        const r = R_MIN + (R_MAX - R_MIN) * t;
+        const p = m.latLngToLayerPoint([lat, lon]);
+        xy[3 * i] = p.x; xy[3 * i + 1] = p.y; xy[3 * i + 2] = r;
+        const [cr, cg, cb] = LUT[Math.round(t * 100)];
+        ctx.beginPath();
+        ctx.arc(p.x - origem.x, p.y - origem.y, r, 0, 2 * Math.PI);
+        ctx.fillStyle = `rgba(${cr},${cg},${cb},${0.35 + 0.3 * t})`;
+        ctx.fill();
+        ctx.strokeStyle = `rgba(${cr},${cg},${cb},0.9)`;
+        ctx.stroke();
+      }
+    },
+    _aoMover(e) {
+      if (this._raf) return;                             // no máximo um teste por quadro
+      const lp = e.layerPoint;
+      this._raf = requestAnimationFrame(() => {
+        this._raf = 0;
+        const xy = this._xy;
+        let hit = -1;
+        for (let i = xy.length / 3 - 1; i >= 0; i--) {   // de cima (menores) para baixo
+          const dx = lp.x - xy[3 * i], dy = lp.y - xy[3 * i + 1], r = xy[3 * i + 2];
+          if (dx * dx + dy * dy <= r * r) { hit = i; break; }
+        }
+        if (hit === this._hit) return;
+        this._hit = hit;
+        this._map.getContainer().style.cursor = hit >= 0 ? "pointer" : "";
+        if (hit < 0) { this._tip.remove(); return; }
+        const [lat, lon, ene, n] = this._pts[hit];
+        this._tip
+          .setLatLng([lat, lon])
+          .setContent(`<b>${fmtEnergia(ene)}</b><span>${fmtInt(n)} UC${n > 1 ? "s" : ""} · média ${fmtEnergia(ene / n)}/UC</span>`);
+        if (!this._map.hasLayer(this._tip)) this._tip.addTo(this._map);
+      });
+    },
+    _limparHover() {
+      this._hit = -1;
+      this._tip?.remove();
+      if (this._map) this._map.getContainer().style.cursor = "";
+    },
+  });
+  const camada = new CamadaBolhas().addTo(map);
 
   function desenharPontos(dados) {
-    camada.clearLayers();
     const pts = dados.pontos;
+    camada.setDados(pts);
     if (!pts.length) {
       $("map-info").textContent = "Nenhuma unidade com coordenadas no filtro/área atual";
       atualizarLegenda(0);
       return;
     }
-    const maxE = pts[0][2] || 1;                         // servidor envia em ordem decrescente
-    for (const [lat, lon, ene, n] of pts) {
-      const t = Math.sqrt(Math.max(ene, 0) / maxE);       // raiz -> área ∝ energia
-      const cor = heatColor(t);
-      const m = L.circleMarker([lat, lon], {
-        renderer,
-        radius: R_MIN + (R_MAX - R_MIN) * t,
-        color: cor,
-        weight: 1,
-        opacity: 0.9,
-        fillColor: cor,
-        fillOpacity: 0.35 + 0.3 * t,
-      });
-      m.bindTooltip(
-        () => `<b>${fmtEnergia(ene)}</b><span>${fmtInt(n)} UC${n > 1 ? "s" : ""} · média ${fmtEnergia(ene / n)}/UC</span>`,
-        { className: "tt", direction: "top", offset: [0, -4] }
-      );
-      camada.addLayer(m);
-    }
+    const maxE = pts[0][2] || 1;
     const km = dados.celula_graus * 111;
     const agreg = km < 0.2 ? "coordenadas individuais (~110 m)" : `agregado em células de ~${km >= 10 ? nf0.format(km) : nf1.format(km)} km`;
     $("map-info").textContent =
@@ -273,7 +351,7 @@
     ol.innerHTML = lista.map((m, i) => `
       <li data-mun="${m.mun}" title="Filtrar ${m.nome}">
         <span class="pos">${i + 1}</span>
-        <span class="nm">${m.nome}<small>${m.uf}</small></span>
+        <span class="nm">${m.nome}<small>${m.sigla}</small></span>
         <span class="val">${fmtEnergia(m.ene)}</span>
         <span class="bar" style="width:${(m.ene / max) * 100}%"></span>
       </li>`).join("");
@@ -339,7 +417,7 @@
     const frag = document.createDocumentFragment();
     for (const m of state.meta.municipios) {
       if (state.uf && m.uf !== state.uf) continue;
-      const label = `${m.nome} (${m.uf})`;
+      const label = `${m.nome} (${m.sigla})`;
       state.munPorLabel.set(label.toLowerCase(), m.mun);
       const o = document.createElement("option");
       o.value = label;
@@ -354,7 +432,7 @@
     if (!m) return;
     state.mun = cod;
     if (state.uf && state.uf !== m.uf) { state.uf = m.uf; $("sel-uf").value = m.uf; popularMunicipios(); }
-    $("inp-mun").value = `${m.nome} (${m.uf})`;
+    $("inp-mun").value = `${m.nome} (${m.sigla})`;
     $("inp-mun").parentElement.classList.add("has-value");
     atualizarTudo(true);
   }
@@ -397,8 +475,8 @@
       meta.municipios.forEach((m) => state.munPorCodigo.set(m.mun, m));
 
       const sel = $("sel-uf");
-      meta.ufs.forEach(({ uf, estado }) => sel.insertAdjacentHTML("beforeend",
-        `<option value="${uf}">${uf} — ${estado}</option>`));
+      meta.ufs.forEach(({ uf, sigla, estado }) => sel.insertAdjacentHTML("beforeend",
+        `<option value="${uf}">${sigla} — ${estado}</option>`));
       popularMunicipios();
 
       montarChips("fonte", meta.fontes, (f) => f.nome);

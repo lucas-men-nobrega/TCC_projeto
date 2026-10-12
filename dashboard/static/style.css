@@ -368,3 +368,6 @@ select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px h
   .charts { flex-direction: column; }
   .main-grid { grid-template-rows: 460px auto; }
 }
+
+/* Camada de bolhas em canvas único: eventos de mouse ficam com o mapa */
+.camada-bolhas { pointer-events: none; }
