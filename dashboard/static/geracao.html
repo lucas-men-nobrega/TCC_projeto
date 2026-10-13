@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Painel de Geração · ANEEL</title>
+  <meta name="description" content="Dashboard interativo da potência das unidades geradoras liberadas para operação comercial no Brasil (ANEEL), com filtros por tipo de geração, estado, período, sistema e comercialização." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M11 2h2v5h-2zM4.2 5.6l1.4-1.4 3.5 3.5-1.4 1.4zM2 11h5v2H2zm15 0h5v2h-5zM14.9 7.7l3.5-3.5 1.4 1.4-3.5 3.5zM12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6zm-1 8h2v5h-2z"/></svg>
+      </div>
+      <div>
+        <h1>Painel de Geração</h1>
+        <p>Unidades geradoras liberadas para operação comercial · ANEEL · <span id="data-base">—</span></p>
+      </div>
+    </div>
+    <nav class="nav" aria-label="Painéis">
+      <a href="index.html">Consumo</a>
+      <a href="geracao.html" class="active" aria-current="page">Geração</a>
+    </nav>
+    <div class="status" id="status-pill"><span class="dot"></span><span id="status-text">Conectando…</span></div>
+  </header>
+
+  <div class="layout">
+    <!-- ============ FILTROS ============ -->
+    <aside class="sidebar glass" id="sidebar">
+      <div class="side-head">
+        <h2>Filtros</h2>
+        <button class="btn-ghost" id="btn-reset" type="button">Limpar</button>
+      </div>
+
+      <section class="filter">
+        <div class="filter-row">
+          <label class="filter-label">Tipo de geração</label>
+          <button class="link" type="button" data-toggle-all="tipo">todos</button>
+        </div>
+        <div class="chips" id="chips-tipo"></div>
+      </section>
+
+      <section class="filter">
+        <label class="filter-label" for="sel-uf">Estado</label>
+        <div class="select-wrap">
+          <select id="sel-uf"><option value="">Todos os estados</option></select>
+        </div>
+      </section>
+
+      <section class="filter">
+        <div class="filter-row">
+          <label class="filter-label">Ano de liberação comercial</label>
+          <button class="link" type="button" id="btn-2014" title="Período com cobertura completa da base">desde 2014</button>
+        </div>
+        <div class="range-row">
+          <div class="select-wrap"><select id="sel-ano-ini" aria-label="Ano inicial"></select></div>
+          <span>a</span>
+          <div class="select-wrap"><select id="sel-ano-fim" aria-label="Ano final"></select></div>
+        </div>
+      </section>
+
+      <section class="filter">
+        <label class="filter-label">Sistema</label>
+        <div class="chips" id="chips-sistema"></div>
+      </section>
+
+      <section class="filter">
+        <label class="filter-label">Comercialização</label>
+        <div class="chips" id="chips-comerc"></div>
+      </section>
+
+      <section class="legend">
+        <h3>Legenda</h3>
+        <div class="legend-bubbles" id="legend-bubbles"></div>
+        <div class="legend-tipos" id="legend-tipos"></div>
+        <p class="legend-note">Uma bolha por estado, no centro das sedes municipais (a base só informa a UF da usina). Área ∝ potência liberada; cor = tipo predominante. Antes de 2014 a base não cobre toda a potência liberada por ano.</p>
+      </section>
+    </aside>
+
+    <!-- ============ CONTEÚDO ============ -->
+    <main class="content">
+      <section class="kpis">
+        <article class="kpi glass">
+          <span class="kpi-label">Potência liberada</span>
+          <strong class="kpi-value" id="kpi-mw">—</strong>
+          <span class="kpi-sub" id="kpi-mw-sub">operação comercial</span>
+        </article>
+        <article class="kpi glass">
+          <span class="kpi-label">Usinas</span>
+          <strong class="kpi-value" id="kpi-usinas">—</strong>
+          <span class="kpi-sub">CEGs distintos</span>
+        </article>
+        <article class="kpi glass">
+          <span class="kpi-label">Unidades geradoras</span>
+          <strong class="kpi-value" id="kpi-ugs">—</strong>
+          <span class="kpi-sub" id="kpi-ugs-sub">&nbsp;</span>
+        </article>
+        <article class="kpi glass">
+          <span class="kpi-label">Solar + eólica</span>
+          <strong class="kpi-value" id="kpi-renov">—</strong>
+          <span class="kpi-sub">da potência no filtro</span>
+        </article>
+      </section>
+
+      <section class="main-grid">
+        <div class="map-card glass">
+          <div id="map" role="region" aria-label="Mapa da potência liberada por estado"></div>
+          <div class="map-info" id="map-info"></div>
+        </div>
+
+        <div class="charts">
+          <article class="chart-card glass">
+            <h3>Potência por tipo de geração</h3>
+            <div class="chart-box donut"><canvas id="chart-tipo"></canvas></div>
+          </article>
+          <article class="chart-card glass">
+            <h3>Potência liberada por ano</h3>
+            <div class="chart-box"><canvas id="chart-ano"></canvas></div>
+          </article>
+          <article class="chart-card glass">
+            <h3>Top 10 usinas</h3>
+            <ol class="ranking" id="ranking"></ol>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="alert"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="geracao.js"></script>
+</body>
+</html>

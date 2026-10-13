@@ -182,9 +182,13 @@ def _lazy_fonte(sigla: str, caminho: Path, incluir_inativas: bool) -> tuple[pl.L
     else:
         ano = pl.col("DAT_CON").cast(pl.Utf8).str.extract(r"(\d{4})", 1).cast(pl.Int32, strict=False)
 
+    # Coordenada medida na própria UC (False quando o ETL imputou a sede do município)
+    coord_uc = (pl.col("COORD_ORIGEM") == "UC") if "COORD_ORIGEM" in nomes else pl.lit(True)
+
     q = q.select(
         pl.lit(sigla).alias("FONTE"), *[txt(c) for c in COLS_TEXTO],
         lon.alias("LON"), lat.alias("LAT"), *exprs_mes, ano.alias("ANO_CON"),
+        coord_uc.alias("_COORD_UC"),
     ).with_columns(
         pl.sum_horizontal([f"M{m:02d}" for m in range(1, 13)]).alias("ENE"),
         (pl.col("LON").is_between(BBOX_BRASIL[0], BBOX_BRASIL[2])
@@ -237,13 +241,14 @@ def agregar_regioes(lf: pl.LazyFrame, classes: list[str], tem_dat: bool, janela:
             pl.col("ANO_CON").filter(pl.col("ANO_CON") <= date.today().year).max()
         )).item()
 
-    geo = pl.col("_GEO")
+    # Centro do município: mediana das UCs com coordenada própria; sem nenhuma, a sede imputada
+    geo, geo_uc = pl.col("_GEO"), pl.col("_GEO") & pl.col("_COORD_UC")
     aggs = [
         pl.col("UF").first(), pl.col("NOME_MUNICIPIO").first(),
         pl.len().alias("N_UC"),
         pl.col("ENE").sum().alias("ENE_TOTAL_kWh"),
-        pl.col("LAT").filter(geo).median().alias("LAT"),
-        pl.col("LON").filter(geo).median().alias("LON"),
+        pl.coalesce(pl.col("LAT").filter(geo_uc).median(), pl.col("LAT").filter(geo).median()).alias("LAT"),
+        pl.coalesce(pl.col("LON").filter(geo_uc).median(), pl.col("LON").filter(geo).median()).alias("LON"),
         *[pl.col(f"M{m:02d}").sum() for m in range(1, 13)],
         *[(pl.col("GRU_TEN") == g).sum().alias(f"N_{g}") for g in classes],
     ]
@@ -905,7 +910,8 @@ def main():
     # ---------------------------------------------------------------- dados
     print("\n[1/6] Carregando bases e amostrando...")
     lf_base, tem_dat = carregar_bases(args.incluir_inativas)
-    lf_modelo = lf_base.filter(pl.col("_GEO") & (pl.col("ENE") > 0) & (pl.col("GRU_TEN") != NA))
+    # Treino só com coordenadas medidas: a sede imputada empilharia milhares de UCs num ponto
+    lf_modelo = lf_base.filter(pl.col("_GEO") & pl.col("_COORD_UC") & (pl.col("ENE") > 0) & (pl.col("GRU_TEN") != NA))
     df, pop = amostrar(lf_modelo, args.n_por_classe, args.seed)
     print(pop[["GRU_TEN", "N_POP", "FRAC"]].to_string(index=False))
 

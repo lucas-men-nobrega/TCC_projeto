@@ -8,7 +8,8 @@ Uso:
 
 Fluxo:
 1. Lê (em modo lazy) as bases *_tensao_municipios.parquet de base/filtrados.
-2. Calcula a energia anual por UC (soma ENE_01 … ENE_12, em kWh).
+2. Mantém só as UCs ativas (SIT_ATIV = AT) e calcula a energia anual por UC
+   (soma ENE_01 … ENE_12, em kWh).
 3. Pré-agrega por (fonte, UF, município, GRU_TEN, GRU_TAR, coordenada arredondada)
    e grava em dashboard/cache/agregado.parquet (feito uma única vez).
 4. Prepara (uma única vez, em dashboard/cache/preparado/) e carrega em memória
@@ -18,6 +19,7 @@ Fluxo:
    • PIRÂMIDE: uma grade pré-agregada por nível de zoom → mapa em poucos ms;
    • enquadramento (bounds) pré-calculado por UF e por município.
 5. Serve a API JSON (/api/...), com cache de respostas e gzip, e o front-end (dashboard/static).
+6. Serve também o painel de geração (/geracao.html, API /api/ger/...), definido em geracao.py.
 """
 from __future__ import annotations
 
@@ -35,6 +37,8 @@ from urllib.parse import parse_qs, urlparse
 
 import polars as pl
 
+import geracao  # painel de unidades geradoras (/geracao.html)
+
 # --------------------------------------------------------------------------- #
 # Configuração
 # --------------------------------------------------------------------------- #
@@ -43,6 +47,8 @@ PROJECT_DIR = ROOT.parent
 DATA_DIR = PROJECT_DIR / "base" / "filtrados"
 CACHE_DIR = ROOT / "cache"
 CACHE_FILE = CACHE_DIR / "agregado.parquet"
+CACHE_VERSAO_FILE = CACHE_DIR / "agregado_versao.txt"
+VERSAO_CACHE = 2                             # incrementar se a regra de agregação mudar (2: só UCs ativas)
 PREP_DIR = CACHE_DIR / "preparado"          # estruturas de consulta prontas
 VERSAO_PREP = 1                              # incrementar se o formato do preparado mudar
 STATIC_DIR = ROOT / "static"
@@ -54,6 +60,7 @@ FONTES = {
 }
 
 COLS_TEXTO = ["UF", "ESTADO", "MUN", "NOME_MUNICIPIO", "GRU_TEN", "GRU_TAR"]
+SIT_ATIVAS = ["AT", "ATIVO", "1"]  # valores de SIT_ATIV mantidos no painel (mesma regra da modelagem)
 PRECISAO_COORD = 3          # ~110 m — granularidade mínima do cache
 BBOX_BRASIL = (-75.0, -35.0, -28.0, 6.5)  # lon_min, lat_min, lon_max, lat_max
 MAX_PONTOS = 15_000         # limite de bolhas enviadas ao navegador por requisição
@@ -134,6 +141,12 @@ def _agregar_fonte(sigla: str, arquivo: Path) -> pl.DataFrame:
     lon_min, lat_min, lon_max, lat_max = BBOX_BRASIL
     dentro = lon.is_between(lon_min, lon_max) & lat.is_between(lat_min, lat_max)
 
+    # Só UCs ativas: as desativadas (SIT_ATIV = DS) são descartadas do painel
+    if "SIT_ATIV" in nomes:
+        q = q.filter(pl.col("SIT_ATIV").cast(pl.Utf8).str.strip_chars().str.to_uppercase().is_in(SIT_ATIVAS))
+    else:
+        print(f"   [AVISO] SIT_ATIV ausente em {arquivo.name} — sem filtro de UCs ativas.")
+
     q = q.select(
         pl.lit(sigla).alias("FONTE"),
         *exprs_texto,
@@ -157,7 +170,9 @@ def construir_cache(forcar: bool = False) -> None:
 
     if CACHE_FILE.exists() and not forcar:
         mtime_cache = CACHE_FILE.stat().st_mtime
-        if all(p.stat().st_mtime < mtime_cache for p in fontes_existentes.values()):
+        versao_ok = (CACHE_VERSAO_FILE.exists()
+                     and CACHE_VERSAO_FILE.read_text(encoding="utf-8").strip() == str(VERSAO_CACHE))
+        if versao_ok and all(p.stat().st_mtime < mtime_cache for p in fontes_existentes.values()):
             print(f"[cache] Usando cache existente: {CACHE_FILE.name}")
             if not _preparado_valido():
                 preparar_estruturas()
@@ -176,6 +191,7 @@ def construir_cache(forcar: bool = False) -> None:
         partes.append(parte)
 
     pl.concat(partes, how="vertical_relaxed").write_parquet(CACHE_FILE, compression="zstd")
+    CACHE_VERSAO_FILE.write_text(str(VERSAO_CACHE), encoding="utf-8")
     print(f"[cache] Gravado em {CACHE_FILE} ({CACHE_FILE.stat().st_size / 1024**2:.1f} MB)")
     preparar_estruturas()
 
@@ -460,6 +476,7 @@ ROTAS = {
     "/api/meta": lambda p: META,
     "/api/pontos": api_pontos,
     "/api/resumo": api_resumo,
+    **geracao.ROTAS,
 }
 
 
@@ -522,6 +539,7 @@ def main() -> None:
 
     construir_cache(forcar=args.rebuild)
     carregar_dados()
+    geracao.carregar()
     aquecer()
 
     url = f"http://localhost:{args.port}"

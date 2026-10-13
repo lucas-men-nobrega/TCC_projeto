@@ -31,7 +31,7 @@ A pesquisa parte de uma hipótese dupla:
 1. **O mercado de energia elétrica está se descentralizando para o interior ou permanece concentrado nas grandes metrópoles do Brasil?**
 2. **Como essa dinâmica está reconfigurando o mercado de energia e a demanda sobre as redes de distribuição?**
 
-A etapa implementada neste repositório olha para o **lado do consumo** (tabelas `UCBT`, `UCMT` e `UCAT`). Ela identifica onde a energia é consumida, como os grupos de tensão se distribuem no território e quais municípios mostram sinais de expansão. A análise do **lado da geração** (tabelas `UGBT`, `UGMT`, `UGAT`, potência instalada e fontes renováveis) está nos [próximos passos](#️-limitações-e-próximos-passos).
+A etapa implementada neste repositório olha para o **lado do consumo** (tabelas `UCBT`, `UCMT` e `UCAT`). Ela identifica onde a energia é consumida, como os grupos de tensão se distribuem no território e quais municípios mostram sinais de expansão. O **lado da geração** entrou com a base ANEEL de **unidades geradoras liberadas para operação comercial** (usinas centralizadas fiscalizadas), analisada por UF e cruzada com o consumo ([resultados](#geração--consumo-por-uf)). A geração distribuída (tabelas `UGBT`, `UGMT`, `UGAT`) e o nível municipal estão nos [próximos passos](#️-limitações-e-próximos-passos).
 
 ---
 
@@ -43,11 +43,15 @@ TCC_projeto/
 │   ├── raw/                        # BDGD convertida de CSV para Parquet (todas as colunas)
 │   │   ├── alta_tensao.parquet     #   UCAT —      2.122 UCs, 101 colunas
 │   │   ├── media_tensao.parquet    #   UCMT —    314.493 UCs,  80 colunas
-│   │   └── baixa_tensao.parquet    #   UCBT — 10.633.671 UCs,  70 colunas
+│   │   ├── baixa_tensao.parquet    #   UCBT — 10.633.671 UCs,  70 colunas
+│   │   └── unidades_geradoras.parquet  # UGs liberadas — 59.581 UGs, 19 colunas
 │   ├── filtrados/                  # Bases reduzidas usadas nas análises
 │   │   ├── *_filtrada.parquet      #   colunas selecionadas
 │   │   └── *_municipios.parquet    #   + UF, ESTADO e NOME_MUNICIPIO (base final)
-│   └── municipios.csv              # Tabela IBGE de municípios (não versionada)
+│   ├── municipios.csv              # Tabela IBGE de municípios (não versionada)
+│   ├── municipios_coordenadas.csv  # Lat/lon da sede de cada município (não versionada)
+│   ├── unidades_geradoras_liberadas.csv  # UGs liberadas para operação (ANEEL, não versionada)
+│   └── dd-liberacao-para-operacao-comercial-detalhado.pdf  # Dicionário da base de UGs
 ├── tratamento_base/
 │   ├── pre_filtragem/              # 1. CSV → Parquet (base/raw)
 │   ├── filtro_colunas/             # 2. Seleção de colunas (base/filtrados/*_filtrada)
@@ -56,11 +60,13 @@ TCC_projeto/
 ├── modelagem/                      # Comparação de modelos de ML e previsões regionais
 │   ├── comparar_modelos_ml.py
 │   ├── prever_nova_uc.py
-│   ├── resultados/                 # CSVs, gráficos e relatório gerados
+│   ├── analise_geracao_uf.py       # Geração (UGs liberadas) × consumo por UF
+│   ├── resultados/                 # CSVs, gráficos e relatório gerados (geracao/ para a geração)
 │   └── README.md                   # Documentação detalhada da modelagem
 ├── dashboard/                      # Painel web interativo (servidor Python + Leaflet/Chart.js)
-│   ├── server.py
-│   ├── static/
+│   ├── server.py                   # Servidor e API do painel de consumo
+│   ├── geracao.py                  # API do painel de geração (/api/ger/...)
+│   ├── static/                     # index.html (consumo) e geracao.html (geração)
 │   └── cache/                      # Cache agregado gerado automaticamente (não versionado)
 └── Manual_de_Instruções_da_BDGD (1).pdf
 ```
@@ -77,6 +83,8 @@ TCC_projeto/
 | **Distribuidoras** | 40 com UCs em AT, 99 em MT e 98 em BT |
 | **Arquivos de origem** | `ucat_pj.csv`, `ucmt_pj.csv`, `UCBT_PJ.csv` (separador `;`) |
 | **Municípios** | `base/municipios.csv` — código IBGE, UF, nome do estado e do município |
+| **Sedes municipais** | `base/municipios_coordenadas.csv` — latitude/longitude da sede de cada município ([kelvins/municipios-brasileiros](https://github.com/kelvins/municipios-brasileiros), derivada do IBGE). Usada só para UCs sem coordenada |
+| **Geração** | ANEEL — *Liberação para operação comercial – Detalhado* ([dados abertos](https://dadosabertos.aneel.gov.br)), gerado em 06/10/2026: `base/unidades_geradoras_liberadas.csv` |
 
 > O sufixo `_PJ` dos arquivos de origem sugere um recorte da BDGD (por exemplo, apenas pessoas jurídicas). Isso é compatível com a pequena participação da tarifa residencial (B1) na baixa tensão. Confirme a forma de extração antes de generalizar os números para todo o mercado.
 
@@ -90,6 +98,8 @@ TCC_projeto/
 | **Total** | **10.950.286** | **9.541.912** | **5.571** | **269,7 TWh** |
 
 Só 0,02% das UCs atende em alta tensão, mas esse grupo responde por **33% da energia**. A média tensão concentra **54%**, e a baixa tensão, com 97% das UCs, consome **13%**.
+
+> ⚠️ **Goiás (distribuidora `DIST = 6072`).** A ANEEL publicou as 417.020 UCs dessa distribuidora **sem coordenadas** (`POINT_X`/`POINT_Y` vazios no CSV original, nas três tensões). O tratamento as posiciona na **sede do município** (`COORD_ORIGEM = SEDE_MUNICIPIO`). Além disso, **97% delas estão como desativadas** (`SIT_ATIV = DS`), e 87% dessas não têm consumo. Nas outras UFs, mais de 73% das UCs estão ativas. Com o filtro de UCs ativas, Goiás fica com 16,4 mil UCs, o que é pouco para o estado. Por isso, os números de Goiás estão **subestimados**.
 
 ---
 
@@ -187,6 +197,31 @@ Corte no percentil 80 do consumo e do índice de expansão, entre os municípios
 | **Baixa dinâmica** | baixo/moderado | baixa/moderada | Consumo e ritmo de conexões moderados |
 | **Amostra insuficiente** | — | — | Menos de 30 UCs: sem classificação |
 
+### Base de unidades geradoras (`base/filtrados/unidades_geradoras_filtrada.parquet`)
+
+Uma linha por unidade geradora (UG) liberada para operação comercial. Abrange SIN e Sistemas Isolados, mas só as usinas acompanhadas pela fiscalização da expansão da oferta. Não inclui a geração distribuída. Dicionário completo em `base/dd-liberacao-para-operacao-comercial-detalhado.pdf`.
+
+| Coluna | Descrição |
+| :--- | :--- |
+| `CodCEG` | Código Único de Empreendimento de Geração (`GGG.FF.UF.999999-D.VV`): chave da usina e do futuro join com o SIGA |
+| `NomUsina` | Nome da usina |
+| `SigTipoGeracao` | `UHE`, `PCH`, `CGH` (hídricas), `EOL` (eólica), `UFV` (fotovoltaica), `UTE` (térmica), `UTN` (nuclear) |
+| `DscOrigemCombustivel` | Solar, Eólica, Hídrica, Fóssil, Biomassa |
+| `SigUFUsina` | Sigla da UF da usina. **Único nível geográfico da base** (sem município nem coordenadas) |
+| `DscSistema` | SIN ou Sistemas Isolados |
+| `NumUgUsina` | Número da UG dentro da usina |
+| `MdaPotenciaOutorgadaUnitaria` | Potência outorgada da UG (kW) |
+| `MdaPotenciaLiberadaTeste` / `MdaPotenciaLiberadaComercial` | Potência liberada para teste / operação comercial (kW) |
+| `DscComercializacaoEnergia` | `ACR` (mercado regulado) ou `Fora do ACR` |
+| `DatLiberOpTesteRealizado` / `DatLiberOpComerRealizado` | Datas de liberação para teste / operação comercial |
+| `UF_COD` | *Derivada*: código IBGE da UF (mesma chave da coluna `UF` das bases de consumo) |
+| `REGIAO` | *Derivada*: região geográfica |
+| `ANO_LIBER_COMER` | *Derivada*: ano da liberação comercial |
+| `POT_COMER_MW` | *Derivada*: `MdaPotenciaLiberadaComercial` / 1000 |
+| `OPERACAO_COMERCIAL` | *Derivada*: UG com data de liberação comercial |
+
+> Segundo a ANEEL, **antes de 2014 a base não cobre toda a potência liberada por ano**. As comparações temporais começam em 2014 (`--ano-inicio`).
+
 ---
 
 ## 🔧 Pipeline de tratamento
@@ -201,11 +236,19 @@ flowchart LR
     D --> F[dashboard/<br/>server.py]
     E --> G[resultados/*.csv, *.png, relatorio.md]
     G --> H[prever_nova_uc.py]
+    U[CSV ANEEL<br/>UGs liberadas] -->|pre_filtragem| UR[base/raw/<br/>unidades_geradoras.parquet]
+    UR -->|filtro_colunas<br/>+ UF_COD, ano, MW| UF[base/filtrados/<br/>unidades_geradoras_filtrada.parquet]
+    UF --> AG[modelagem/<br/>analise_geracao_uf.py]
+    D --> AG
+    AG --> RG[resultados/geracao/<br/>*.csv, *.png, relatorio_geracao.md]
+    UF --> F
 ```
 
 1. **Pré-filtragem**: converte os CSVs da BDGD para Parquet com compressão zstd. O arquivo de BT é convertido para UTF-8 (`baixa_tensao_utf8.csv`) antes da leitura, e a leitura é em *streaming* para caber na memória.
 2. **Filtro de colunas**: mantém `MUN`, `GRU_TEN`, `GRU_TAR`, `SIT_ATIV`, `DAT_CON`, as colunas de energia e as coordenadas.
-3. **Junção com municípios**: *left join* por `MUN`, que preserva todas as UCs. Ficam sem município 61 UCs de MT e 896 de BT, cujo código `MUN` não consta na tabela do IBGE.
+3. **Junção com municípios**: *left join* por `MUN`, que preserva todas as UCs. Ficam sem município 61 UCs de MT e 896 de BT, cujo código `MUN` não consta na tabela do IBGE. Na mesma etapa, as UCs sem coordenada recebem a posição da sede do município. A coluna `COORD_ORIGEM` registra a origem: `UC` (medida), `SEDE_MUNICIPIO` (imputada) ou `SEM_COORDENADA`. A modelagem **não treina** com coordenadas imputadas, mas as usa para posicionar o município nas previsões regionais. No painel, essas UCs aparecem empilhadas na sede.
+
+**Unidades geradoras:** a pré-filtragem lê o CSV com vírgula decimal e mantém `CodCEG` e despachos como texto. A leitura **não** usa `ignore_errors`, para que um valor de potência mal formatado interrompa o script em vez de virar nulo. O filtro converte as datas e deriva `UF_COD`, `REGIAO`, `ANO_LIBER_COMER` e `POT_COMER_MW`. Não há etapa de municípios, porque a base não tem `MUN`.
 
 ---
 
@@ -227,6 +270,9 @@ python tratamento_base/filtro_colunas/filtro_alta_tensao.py
 python tratamento_base/filtro_colunas/filtro_media_tensao.py
 python tratamento_base/filtro_colunas/filtro_baixa_tensao.py
 python tratamento_base/merge_municipios/junta_df_municipios.py
+# Unidades geradoras liberadas
+python tratamento_base/pre_filtragem/tratamento_unidades_geradoras.py
+python tratamento_base/filtro_colunas/filtro_unidades_geradoras.py
 ```
 
 > Os scripts de tratamento usam caminhos absolutos (`C:\Users\LUCAS\...\TCC_projeto\base`). Em outra máquina, ajuste a constante `BASE_DIR` no topo de cada script.
@@ -247,7 +293,14 @@ python modelagem/prever_nova_uc.py --lat -22.905 --lon -47.060
 python modelagem/prever_nova_uc.py --interativo
 ```
 
-**4. Painel interativo:**
+**4. Geração × consumo por UF** (≈ 1 min; usa as bases de consumo e de UGs):
+
+```powershell
+python modelagem/analise_geracao_uf.py                   # janela recente a partir de 2014
+python modelagem/analise_geracao_uf.py --ano-inicio 2020
+```
+
+**5. Painel interativo:**
 
 ```powershell
 python dashboard/server.py              # abre http://localhost:8050
@@ -255,7 +308,17 @@ python dashboard/server.py --rebuild    # força a reconstrução do cache
 python dashboard/server.py --port 9000  # porta alternativa
 ```
 
-Na primeira execução, o painel gera o cache em `dashboard/cache/` (≈ 20 s). Nas seguintes, abre em menos de 1 s. O cache é refeito sozinho quando as bases mudam.
+Na primeira execução, o painel gera o cache em `dashboard/cache/` (≈ 20 s). Nas seguintes, abre em menos de 1 s. O cache é refeito sozinho quando as bases ou a regra de agregação (`VERSAO_CACHE`) mudam.
+
+O painel mostra **só UCs ativas** (`SIT_ATIV = AT`): 9.541.912 UCs e 259,1 TWh. As desativadas são descartadas na montagem do cache, com a mesma regra da modelagem.
+
+**Painel de geração** (`http://localhost:8050/geracao.html`, ou botão *Geração* no topo): mostra a potência das unidades geradoras liberadas para operação comercial. Os filtros são tipo de geração, estado, ano de liberação (com atalho "desde 2014"), sistema (SIN ou isolado) e comercialização (ACR ou fora do ACR). A página traz:
+- **Indicadores:** potência, usinas, UGs e participação de solar + eólica.
+- **Mapa:** uma bolha por estado. A área é proporcional à potência e a cor indica o tipo predominante. Como a base só informa a UF, cada bolha fica no centro geográfico das sedes municipais do estado.
+- **Gráficos:** potência por tipo e por ano.
+- **Ranking:** as 10 maiores usinas.
+
+O painel é servido pelo mesmo `server.py`, sem cache, porque a base tem só 60 mil linhas. Ele exige o ETL de unidades geradoras e o arquivo `base/municipios_coordenadas.csv`.
 
 ---
 
@@ -275,6 +338,13 @@ Na primeira execução, o painel gera o cache em `dashboard/cache/` (≈ 20 s). 
 | 10 | Painel — equivalência | 12 consultas comparadas entre o servidor antigo e o novo | ✅ Resultados idênticos. No mapa, só as células de borda diferem, porque agora a célula inteira é incluída |
 | 11 | Painel — pirâmide de zoom | Cada nível montado por agregação sucessiva comparado ao cálculo direto na base | ✅ Idêntico nos 8 níveis (zoom 3 a 10) |
 | 12 | Painel — navegador | Selenium + Chrome headless: carga, hover, filtro por UF, zoom, console | ✅ Sem erros de JavaScript. Tooltip, filtros e siglas de UF funcionando |
+| 13 | UGs — leitura do CSV | Linhas, usinas e soma da potência comercial contra o CSV lido como texto | ✅ 59.581 UGs, 2.772 `CodCEG`. Soma idêntica: 134.861.480,09 kW |
+| 14 | UGs — nulos e datas | Nulos após a conversão comparados aos campos vazios do CSV | ✅ Nulos idênticos (405 em potência de teste, 465 em data de teste, 0 em data comercial): nenhuma falha de conversão |
+| 15 | UGs — chave de UF | Siglas sem código IBGE e UFs no cruzamento com o consumo | ✅ 0 siglas sem código. 27 UFs no cruzamento (DF sem usina na base). Soma por UF = total nacional |
+| 16 | Lacuna de Goiás no mapa | UCs sem coordenada por UF e distribuidora, conferidas no CSV original | ⚠️ 98,6% das UCs de GO sem coordenada, todas da `DIST 6072`, já vazias na origem. **Corrigido**: sede do município imputada (47 AT, 9.237 MT e 407.736 BT). Linhas inalteradas, 0 UCs sem coordenada, 238 municípios de GO com centro definido para as previsões. Conjunto de treino inalterado (9.531.013 UCs elegíveis) |
+| 17 | Situação das UCs de Goiás | `SIT_ATIV` e consumo por UF | ⚠️ 97% das UCs da `DIST 6072` estão desativadas (`DS`), contra menos de 27% nas outras UFs. Registrado como limitação |
+| 18 | Painel — só UCs ativas | Total de UCs e de Goiás no cubo do painel após reconstruir o cache | ✅ 9.541.912 UCs, igual ao total de ativas da tabela de volume. GO com 16.445 UCs. Cache antigo invalidado pela `VERSAO_CACHE` |
+| 19 | Painel de geração — navegador | Selenium + Chrome headless: carga, filtros (desde 2014 + EOL + BA), clique no ranking, console, comparação com a API | ✅ Totais iguais aos do relatório (134,86 GW, 2.772 usinas, 59.581 UGs). BA + eólica desde 2014 = 11,58 GW em 371 usinas, igual à consulta direta. Sem erros de JavaScript. Painel de consumo intacto |
 
 **Desempenho do painel (antes → depois da otimização):**
 
@@ -342,6 +412,24 @@ Alvo: `GRU_TEN`. Features: só a localização e a engenharia espacial. A métri
 
 Arquivos completos em [`modelagem/resultados/`](modelagem/resultados/), incluindo o [`relatorio.md`](modelagem/resultados/relatorio.md).
 
+### Geração × consumo por UF
+
+Base: 134,9 GW liberados para operação comercial em 2.772 usinas. Por tipo: UTE 39,7 GW, EOL 35,0 GW, UHE 32,1 GW, UFV 23,2 GW, PCH 4,7 GW e CGH 0,2 GW. O consumo vem das UCs ativas da BDGD.
+
+| Região | Potência liberada (total) | Potência liberada desde 2014 | Consumo das UCs |
+| :--- | ---: | ---: | ---: |
+| Nordeste | 41,3% | 47,0% | 14,0% |
+| Sudeste | 21,8% | 18,4% | 50,5% |
+| Norte | 20,9% | 24,3% | 4,8% |
+| Sul | 9,0% | 5,1% | 23,7% |
+| Centro-Oeste | 7,0% | 5,2% | 7,0% |
+
+- **Maior potência liberada:** BA (16,3 GW, 92% solar+eólica), PA (15,1 GW, hídrica), RN (13,1 GW, 98% solar+eólica) e MG (12,7 GW, com a maior potência solar do país).
+- **Razão potência/consumo** (participação na potência ÷ participação no consumo): PI 10,3, RN 8,4, PA 7,7 e RO 7,2. No outro extremo estão SP 0,21, AL 0,22, PR 0,31 e SC 0,34.
+- 2026 é ano parcial (base gerada em 06/10/2026).
+
+Arquivos em [`modelagem/resultados/geracao/`](modelagem/resultados/geracao/), incluindo o [`relatorio_geracao.md`](modelagem/resultados/geracao/relatorio_geracao.md).
+
 ---
 
 ## 🧾 Conclusões
@@ -358,6 +446,8 @@ Arquivos completos em [`modelagem/resultados/`](modelagem/resultados/), incluind
 
 6. **Nos dados de consumo, a hipótese de descentralização ainda não é respondida.** Os polos de maior consumo continuam sendo as grandes metrópoles e capitais. Medir a migração para o interior exige uma série temporal confiável (limitada pelo item 5) ou os dados de geração (`UGxx`).
 
+7. **A geração centralizada cresce longe do consumo.** Desde 2014, Nordeste e Norte receberam 71% da potência liberada, mas concentram 19% do consumo das UCs. Sudeste e Sul somam 74% do consumo e 23% da nova potência. A oferta se desloca para o interior, puxada por eólica e solar no Nordeste e por grandes hidrelétricas no Norte. A demanda segue nos centros do Sul-Sudeste. Isso reforça o papel da transmissão. A base, porém, está em nível de UF e não inclui a geração distribuída, então ainda não mostra a dinâmica metrópole × interior *dentro* de cada estado.
+
 ---
 
 ## ⚠️ Limitações e próximos passos
@@ -368,11 +458,14 @@ Arquivos completos em [`modelagem/resultados/`](modelagem/resultados/), incluind
 - Os arquivos `_PJ` parecem ser um recorte da BDGD; a confirmar antes de extrapolar para todo o mercado.
 - Os scripts de tratamento usam caminhos absolutos.
 - Os significados de alguns códigos de `GRU_TAR` (marcados com \*) precisam ser confirmados no Anexo II do DDA.
+- Goiás (`DIST 6072`): UCs posicionadas na sede do município (sem coordenada na origem) e 97% marcadas como desativadas. Os números do estado estão subestimados. Vale testar uma versão mais nova da BDGD dessa distribuidora.
+- A base de UGs liberadas só tem a UF da usina, cobre apenas usinas fiscalizadas na expansão da oferta (sem geração distribuída) e é incompleta antes de 2014.
 
 **Próximos passos:**
 1. Rodar `comparar_modelos_ml.py` completo e atualizar as tabelas desta página.
 2. Criar um índice de expansão robusto: normalizar por distribuidora ou excluir as que têm datas recadastradas.
-3. Fazer a **análise do lado da geração** (roteiro original da pesquisa):
+3. Levar a geração centralizada ao **nível municipal**: juntar `CodCEG` da base de UGs com o SIGA (dados.aneel.gov.br) para obter município e coordenadas, ligar a `municipios.csv` por `MUN` e comparar metrópole × interior. Depois, adicionar uma camada de usinas no painel.
+4. Completar a **análise do lado da geração** com a geração distribuída (roteiro original da pesquisa):
    - nas tabelas `UGBT`, `UGMT` e `UGAT`, usar `MUN`, `ARE_LOC`, `POT_INST`, `DAT_CON` e `CEG`/`CODGD`;
    - comparar a potência instalada entre metrópoles e interior, ano a ano;
    - cruzar com as bases SIGA e SISGD da ANEEL para identificar a fonte (ex.: solar fotovoltaica);

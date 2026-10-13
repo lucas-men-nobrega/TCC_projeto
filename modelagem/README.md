@@ -123,6 +123,24 @@ python modelagem/prever_nova_uc.py --lat -22.905 --lon -47.060
 
 ---
 
+## 🏭 Geração × Consumo por UF: `analise_geracao_uf.py`
+
+Cruza a base ANEEL de unidades geradoras liberadas para operação comercial (`base/filtrados/unidades_geradoras_filtrada.parquet`) com o consumo das UCs agregado por UF. O consumo usa `carregar_bases` deste módulo, com as mesmas regras de energia e de UCs ativas. A chave é o código IBGE da UF. O DF aparece com geração zero, porque não tem usina na base.
+
+```powershell
+python modelagem/analise_geracao_uf.py                     # janela recente desde 2014
+python modelagem/analise_geracao_uf.py --ano-inicio 2020   # outra janela
+python modelagem/analise_geracao_uf.py --incluir-inativas  # inclui UCs inativas no consumo
+```
+
+A janela começa em 2014 porque a ANEEL avisa que a base é incompleta antes disso. Saídas em `resultados/geracao/`:
+
+* `geracao_uf_fonte_ano.csv`: usinas, UGs e MW por UF × tipo de geração × ano de liberação.
+* `geracao_vs_consumo_uf.csv`: potência total e recente, % solar+eólica, % ACR, UCs, GWh, participações nacionais e `RAZAO_POT_CONSUMO` (> 1 = UF com perfil exportador).
+* `potencia_uf_tipo.png`, `potencia_ano_regiao.png`, `consumo_x_potencia_uf.png` e `relatorio_geracao.md`.
+
+---
+
 ## 📁 Estrutura de Arquivos Gerados (`modelagem/resultados/`)
 
 Ao final do processamento, os seguintes arquivos são gravados:

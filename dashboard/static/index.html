@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Painel de Consumo Energético · BDGD/ANEEL</title>
-  <meta name="description" content="Dashboard interativo do consumo anual de energia (kWh) das unidades consumidoras de alta, média e baixa tensão no Brasil, com filtros por estado, município, grupo de tensão e grupo tarifário." />
+  <meta name="description" content="Dashboard interativo do consumo anual de energia (kWh) das unidades consumidoras ativas de alta, média e baixa tensão no Brasil, com filtros por estado, município, grupo de tensão e grupo tarifário." />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -25,6 +25,10 @@
         <p>Unidades consumidoras · BDGD / ANEEL · energia anual (ENE_01 → ENE_12)</p>
       </div>
     </div>
+    <nav class="nav" aria-label="Painéis">
+      <a href="index.html" class="active" aria-current="page">Consumo</a>
+      <a href="geracao.html">Geração</a>
+    </nav>
     <div class="status" id="status-pill"><span class="dot"></span><span id="status-text">Conectando…</span></div>
   </header>
 
@@ -91,7 +95,7 @@
           <span class="kpi-sub" id="kpi-energia-sub">soma ENE_01 a ENE_12</span>
         </article>
         <article class="kpi glass">
-          <span class="kpi-label">Unidades consumidoras</span>
+          <span class="kpi-label">Unidades consumidoras ativas</span>
           <strong class="kpi-value" id="kpi-ucs">—</strong>
           <span class="kpi-sub" id="kpi-ucs-sub">&nbsp;</span>
         </article>
