@@ -1,35 +1,35 @@
 # Comparação de algoritmos de ML — BDGD/ANEEL
 
-- Amostra estratificada por GRU_TEN: **32.042** UCs (pesos restauram a população)
-- Validação: **Spatial Block CV** — 3 folds, blocos = 30 clusters K-means
+- Amostra estratificada por GRU_TEN: **121.884** UCs (pesos restauram a população)
+- Validação: **Spatial Block CV** — 5 folds, blocos = 50 clusters K-means
 - Índice de expansão: DAT_CON (conexões recentes até 2026 e crescimento entre janelas)
 
 ## Tarefa 1 — consumo anual de uma nova UC (log1p kWh)
 | modelo | familia | RMSE_log_media | RMSE_log_dp | R2_log_media | MdAPE_pct_media |
 |---|---|---|---|---|---|
-| CatBoost (feat. espaciais) | Gradient Boosting | 1,8156 | 0,0141 | 0,1381 | 80,3999 |
-| Random Forest padrão (lat/lon) | Random Forest | 1,8308 | 0,0144 | 0,1218 | 79,2408 |
-| Krigagem com regressão (GP) | Processo Gaussiano | 1,8671 | 0,0474 | 0,0866 | 81,3189 |
-| Random Forest espacial (RF-sp) | Random Forest | 1,8893 | 0,0388 | 0,0672 | 80,6360 |
-| LightGBM (feat. espaciais) | Gradient Boosting | 1,9108 | 0,0656 | 0,0359 | 80,0427 |
-| XGBoost (feat. espaciais) | Gradient Boosting | 2,0012 | 0,0337 | -0,0491 | 83,2932 |
-| Baseline · kNN espacial | Linha de base | 2,1007 | 0,0271 | -0,1500 | 97,6037 |
-| GWR (mgwr) | Estatístico espacial | 2,2418 | 0,1855 | -0,3473 | 90,7234 |
+| Random Forest padrão (lat/lon) | Random Forest | 1,7533 | 0,0603 | 0,2030 | 77,8329 |
+| CatBoost (feat. espaciais) | Gradient Boosting | 1,8227 | 0,1468 | 0,1424 | 79,3113 |
+| Random Forest espacial (RF-sp) | Random Forest | 1,8235 | 0,1253 | 0,1415 | 80,2375 |
+| LightGBM (feat. espaciais) | Gradient Boosting | 1,8295 | 0,1553 | 0,1379 | 78,1760 |
+| Krigagem com regressão (GP) | Processo Gaussiano | 1,8936 | 0,0972 | 0,0603 | 81,2732 |
+| XGBoost (feat. espaciais) | Gradient Boosting | 1,9218 | 0,1834 | 0,0469 | 81,8989 |
+| Baseline · kNN espacial | Linha de base | 2,0412 | 0,1675 | -0,0719 | 96,6207 |
+| GWR (mgwr) | Estatístico espacial | 2,1750 | 0,2264 | -0,2948 | 85,6758 |
 
-**Melhor modelo:** CatBoost (feat. espaciais)
+**Melhor modelo:** Random Forest padrão (lat/lon)
 
 ## Tarefa 2 — distribuição de GRU_TEN por região
 | modelo | familia | LogLoss_media | F1_macro_media | TVD_regional_media |
 |---|---|---|---|---|
-| GP classificador (RBF) | Processo Gaussiano | 0,2002 | 0,2130 | 0,0941 |
-| CatBoost (feat. espaciais) | Gradient Boosting | 0,2031 | 0,2130 | 0,0951 |
-| LightGBM (feat. espaciais) | Gradient Boosting | 0,2206 | 0,2360 | 0,1191 |
-| Baseline · kNN espacial | Linha de base | 0,2579 | 0,2191 | 0,0968 |
-| Random Forest padrão (lat/lon) | Random Forest | 0,2995 | 0,2732 | 0,1664 |
-| Random Forest espacial (RF-sp) | Random Forest | 0,3495 | 0,3120 | 0,2069 |
-| XGBoost (feat. espaciais) | Gradient Boosting | 1,1137 | 0,3298 | 0,4495 |
+| CatBoost (feat. espaciais) | Gradient Boosting | 0,2063 | 0,2192 | 0,0856 |
+| GP classificador (RBF) | Processo Gaussiano | 0,2065 | 0,2190 | 0,0915 |
+| LightGBM (feat. espaciais) | Gradient Boosting | 0,2145 | 0,2447 | 0,0879 |
+| Random Forest padrão (lat/lon) | Random Forest | 0,2690 | 0,2725 | 0,1355 |
+| Baseline · kNN espacial | Linha de base | 0,3108 | 0,2288 | 0,0968 |
+| Random Forest espacial (RF-sp) | Random Forest | 0,3682 | 0,3098 | 0,1806 |
+| XGBoost (feat. espaciais) | Gradient Boosting | 0,6740 | 0,3588 | 0,2972 |
 
-**Melhor modelo:** GP classificador (RBF)
+**Melhor modelo:** CatBoost (feat. espaciais)
 
 ## Top 15 municípios — maior consumo anual
 | NOME_MUNICIPIO | UF | N_UC | ENE_TOTAL_kWh | QUADRANTE |
