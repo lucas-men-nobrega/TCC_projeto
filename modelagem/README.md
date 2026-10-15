@@ -100,6 +100,10 @@ python modelagem/comparar_modelos_ml.py
 * `--tipo-bloco municipio`: Utiliza limites municipais ao invés de clusters K-means nos folds.
 * `--n-blocos 80`: Quantidade de clusters espaciais para particionar o Brasil.
 * `--n-arvores 500`: Número de estimadores para os modelos de Gradient Boosting.
+* `--com-geracao`: Acrescenta variantes "+ geração" do RF padrão, do CatBoost e do LightGBM, com as variáveis `GER_*` de `features_geracao.py`, nas duas tarefas. Grava `ablacao_geracao.csv` com a diferença por fold e acrescenta uma seção ao `relatorio.md`. Exige `base/filtrados/unidades_geradoras_geo.parquet`.
+* `--saida PASTA`: Grava os resultados em outra pasta. Útil para testes rápidos sem sobrescrever `resultados/`.
+
+O ano de referência do índice de expansão tem como teto `ANO_DATA_BASE = 2025` (data-base da BDGD). Datas de ligação posteriores são descartadas.
 
 ---
 
@@ -138,6 +142,45 @@ A janela começa em 2014 porque a ANEEL avisa que a base é incompleta antes dis
 * `geracao_uf_fonte_ano.csv`: usinas, UGs e MW por UF × tipo de geração × ano de liberação.
 * `geracao_vs_consumo_uf.csv`: potência total e recente, % solar+eólica, % ACR, UCs, GWh, participações nacionais e `RAZAO_POT_CONSUMO` (> 1 = UF com perfil exportador).
 * `potencia_uf_tipo.png`, `potencia_ano_regiao.png`, `consumo_x_potencia_uf.png` e `relatorio_geracao.md`.
+
+---
+
+## ⚡ Geração como apoio ao modelo de consumo
+
+Os três scripts usam as usinas georreferenciadas pelo SIGA (`base/filtrados/unidades_geradoras_geo.parquet`, gerado por `tratamento_base/merge_municipios/georreferenciar_usinas.py`).
+
+### `features_geracao.py`: variáveis `GER_*`
+Calcula, para qualquer ponto, variáveis do entorno com BallTree haversine:
+* `GER_LOG_DIST_KM`: distância (log) até a usina mais próxima;
+* `GER_MW_25/50/100`: MW liberados a até 25, 50 e 100 km (log1p);
+* `GER_MW_RENOV_50`: MW de solar + eólica a até 50 km;
+* `GER_MW_RECENTE_50`: MW liberados desde 2014 a até 50 km;
+* `GER_N_USINAS_50`: número de usinas a até 50 km.
+
+O parâmetro `ano_max` corta as usinas pelo ano de liberação, o que impede uso de dados do futuro. Como as variáveis vêm de fonte externa e não usam o alvo, não há ajuste por fold.
+
+### `modelo_expansao_geracao.py`: Tarefa 3
+```powershell
+python modelagem/modelo_expansao_geracao.py   # ~2 min
+```
+* **Pergunta:** quais municípios recebem nova potência liberada nos 5 anos seguintes a um ano de corte T?
+* **Variáveis (só até T):** conexões por ano via `DAT_CON`, crescimento e mix de tensão; estoque de geração no município e no entorno; posição da sede. O consumo de 2025 não entra.
+* **Validação temporal:** treino em T=2015, teste em T=2020.
+* **Validação espacial:** 5 folds em blocos, em T=2020.
+* **Modelos:** kNN espacial e persistência como linhas de base, regressão logística, RF, LightGBM e CatBoost. Há também uma parte contínua (*hurdle*) para os MW recebidos.
+* **Saídas em `resultados/geracao/`:** `tarefa3_comparacao.csv`, `tarefa3_por_fold.csv`, `tarefa3_mw_comparacao.csv`, `tarefa3_importancia.csv`, `previsao_expansao_geracao_municipios.csv` (probabilidade para 2026–2030) e `relatorio_tarefa3.md`.
+
+### `validacao_expansao.py`: selo de confiabilidade
+```powershell
+python modelagem/validacao_expansao.py   # depois de comparar_modelos_ml.py
+```
+* **Suspeita de recadastramento:** município cuja fração de UCs ativas ligadas nos últimos 3 anos passa de 3× a mediana nacional.
+* **Evidência independente:** MW liberados em 2021–2025 a até 50 km da sede.
+* **Selo:**
+  * **Baixa:** amostra insuficiente, ou suspeita sem geração no entorno;
+  * **Média:** suspeita, mas com geração no entorno;
+  * **Alta:** sem suspeita.
+* **Saídas:** `previsoes_regionais_municipios_validado.csv` e `relatorio_validacao.md`, com as correlações de Spearman entre o índice e a geração. O `prever_nova_uc.py` mostra o selo quando o arquivo validado é mais recente que as previsões.
 
 ---
 

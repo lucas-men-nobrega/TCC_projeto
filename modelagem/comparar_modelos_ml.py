@@ -45,7 +45,6 @@ import argparse
 import time
 import warnings
 from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 
@@ -61,6 +60,8 @@ from sklearn.metrics import balanced_accuracy_score, f1_score, log_loss
 from sklearn.model_selection import GroupKFold, KFold
 from sklearn.neighbors import BallTree
 from sklearn.preprocessing import StandardScaler
+
+import features_geracao  # variáveis GER_* das usinas liberadas (--com-geracao)
 
 warnings.filterwarnings("ignore")
 
@@ -102,6 +103,7 @@ BBOX_BRASIL = (-75.0, -35.0, -28.0, 6.5)
 R_TERRA_KM = 6371.0
 NA = "N/D"
 ESQUEMA_PRINCIPAL = "espacial_blocos"
+ANO_DATA_BASE = 2025  # data-base da BDGD (31/12/2025): DAT_CON posterior é data inválida
 
 
 def _coletar(lf: pl.LazyFrame) -> pl.DataFrame:
@@ -187,7 +189,8 @@ def _lazy_fonte(sigla: str, caminho: Path, incluir_inativas: bool) -> tuple[pl.L
 
     q = q.select(
         pl.lit(sigla).alias("FONTE"), *[txt(c) for c in COLS_TEXTO],
-        lon.alias("LON"), lat.alias("LAT"), *exprs_mes, ano.alias("ANO_CON"),
+        lon.alias("LON"), lat.alias("LAT"), *exprs_mes,
+        pl.when(ano <= ANO_DATA_BASE).then(ano).otherwise(None).alias("ANO_CON"),  # descarta datas futuras
         coord_uc.alias("_COORD_UC"),
     ).with_columns(
         pl.sum_horizontal([f"M{m:02d}" for m in range(1, 13)]).alias("ENE"),
@@ -238,7 +241,7 @@ def agregar_regioes(lf: pl.LazyFrame, classes: list[str], tem_dat: bool, janela:
     ano_ref = None
     if tem_dat:
         ano_ref = _coletar(lf.select(
-            pl.col("ANO_CON").filter(pl.col("ANO_CON") <= date.today().year).max()
+            pl.col("ANO_CON").filter(pl.col("ANO_CON") <= ANO_DATA_BASE).max()
         )).item()
 
     # Centro do município: mediana das UCs com coordenada própria; sem nenhuma, a sede imputada
@@ -278,9 +281,11 @@ class ConstrutorFeatures:
     """
     SUAVIZACAO = 20
 
-    def __init__(self, tarefa: str, k: int = 15, rotacoes=(15, 30, 45, 60), cats=(), classes=()):
+    def __init__(self, tarefa: str, k: int = 15, rotacoes=(15, 30, 45, 60), cats=(), classes=(),
+                 geracao: bool = False):
         self.tarefa, self.k, self.rotacoes = tarefa, k, tuple(rotacoes)
         self.cats, self.classes = list(cats), list(classes)
+        self.geracao = geracao  # acrescenta as variáveis GER_* (features_geracao.py)
 
     # ---------------------------------------------------------------- fit
     def fit(self, df: pd.DataFrame, y, w):
@@ -341,6 +346,10 @@ class ConstrutorFeatures:
                 out[f"KNN_P_{nm}"] = P[:, j]
 
         F = pd.DataFrame(out, index=df.index)
+        if self.geracao:
+            # Fonte externa (usinas liberadas até a data-base): sem ajuste por fold, sem vazamento
+            G = features_geracao.variaveis_geracao(lat, lon, ano_max=ANO_DATA_BASE)
+            F[features_geracao.COLUNAS_GER] = G.to_numpy()
         for c in self.cats:
             v = df[c].astype(str)
             F[c] = pd.Categorical(v.where(v.isin(self.niveis[c])), categories=self.niveis[c])
@@ -356,11 +365,17 @@ class ConstrutorFeatures:
             "knn": knn,
             "te": [f"TE_{c}" for c in self.cats] if self.tarefa == "regressao" else [],
             "cats": list(self.cats),
+            "ger": list(features_geracao.COLUNAS_GER) if self.geracao else [],
         }
 
 
 def cols_basico(g):   return g["coords"] + g["cats"]
 def cols_espacial(g): return g["coords"] + g["rot"] + g["knn"] + g["te"] + g["cats"]
+def cols_basico_ger(g):   return cols_basico(g) + g["ger"]
+def cols_espacial_ger(g): return cols_espacial(g) + g["ger"]
+
+
+SUFIXO_GER = " + geração"  # variantes da ablação: mesmo modelo, com as variáveis GER_*
 
 
 # --------------------------------------------------------------------------- #
@@ -526,11 +541,16 @@ def especificacoes(tarefa: str, args, n_cls: int = 0) -> list[Espec]:
     E.append(Espec("Baseline · kNN espacial", "Linha de base", lambda g: g["knn"], "none",
                    lambda: BaselineKNN(tarefa)))
 
+    ger = getattr(args, "com_geracao", False)
     if lgb:
         par = dict(n_estimators=nt, learning_rate=0.05, num_leaves=63, min_child_samples=30,
                    subsample=0.8, subsample_freq=1, colsample_bytree=0.8, n_jobs=-1, verbose=-1, random_state=s)
         E.append(Espec("LightGBM (feat. espaciais)", "Gradient Boosting", cols_espacial, "category",
                        lambda par=par: wrap(lgb.LGBMRegressor(**par) if reg else lgb.LGBMClassifier(**par))))
+        if ger:
+            E.append(Espec("LightGBM (feat. espaciais)" + SUFIXO_GER, "Gradient Boosting", cols_espacial_ger,
+                           "category",
+                           lambda par=par: wrap(lgb.LGBMRegressor(**par) if reg else lgb.LGBMClassifier(**par))))
     if xgb:
         par = dict(n_estimators=nt, learning_rate=0.05, max_depth=8, subsample=0.8, colsample_bytree=0.8,
                    tree_method="hist", enable_categorical=True, n_jobs=-1, random_state=s)
@@ -542,12 +562,20 @@ def especificacoes(tarefa: str, args, n_cls: int = 0) -> list[Espec]:
         E.append(Espec("CatBoost (feat. espaciais)", "Gradient Boosting", cols_espacial, "str",
                        lambda par=par: wrap(cb.CatBoostRegressor(**par) if reg else
                                     cb.CatBoostClassifier(loss_function="MultiClass", **par))))
+        if ger:
+            E.append(Espec("CatBoost (feat. espaciais)" + SUFIXO_GER, "Gradient Boosting", cols_espacial_ger,
+                           "str",
+                           lambda par=par: wrap(cb.CatBoostRegressor(**par) if reg else
+                                        cb.CatBoostClassifier(loss_function="MultiClass", **par))))
 
     par_rf = dict(n_estimators=max(100, nt // 2), min_samples_leaf=5, max_features=0.5,
                   max_samples=0.5, n_jobs=-1, random_state=s)
     RF = RandomForestRegressor if reg else RandomForestClassifier
     E.append(Espec("Random Forest padrão (lat/lon)", "Random Forest", cols_basico, "onehot",
                    lambda: wrap(RF(**par_rf))))
+    if ger:
+        E.append(Espec("Random Forest padrão (lat/lon)" + SUFIXO_GER, "Random Forest", cols_basico_ger, "onehot",
+                       lambda: wrap(RF(**par_rf))))
     E.append(Espec("Random Forest espacial (RF-sp)", "Random Forest", cols_espacial, "onehot",
                    lambda: wrap(RF(**par_rf))))
 
@@ -675,7 +703,8 @@ def validar(tarefa, df, y, w, specs, splits, args, classes):
                                          else np.full((len(df), n_cls), np.nan))
         for f, (tr, te) in enumerate(folds, start=1):
             t0 = time.time()
-            fb = ConstrutorFeatures(tarefa, k=args.k, cats=cats, classes=classes).fit(df.iloc[tr], y[tr], w[tr])
+            fb = ConstrutorFeatures(tarefa, k=args.k, cats=cats, classes=classes,
+                               geracao=args.com_geracao).fit(df.iloc[tr], y[tr], w[tr])
             Ftr, Fte = fb.transform(df.iloc[tr], treino=True), fb.transform(df.iloc[te])
             print(f"   [{esquema}] fold {f}/{len(folds)} — treino {len(tr):,} | teste {len(te):,} "
                   f"(features {time.time() - t0:.0f}s)".replace(",", "."))
@@ -713,12 +742,37 @@ def resumir(res: pd.DataFrame, metricas: list[str], principal: str, crescente: b
     return agg.reset_index().sort_values(["esquema", f"{principal}_media"], ascending=[True, crescente])
 
 
+def ablacao_geracao(res: pd.DataFrame, tarefa: str, metricas: dict[str, bool]) -> pd.DataFrame:
+    """Comparação pareada (mesmos folds) de cada modelo '+ geração' com o modelo base.
+    metricas: {nome: True se menor é melhor}. Delta = com geração − sem geração."""
+    ok = res[(res["erro"].isna()) & (res["esquema"] == ESQUEMA_PRINCIPAL)]
+    linhas = []
+    for nome in ok["modelo"].unique():
+        if not nome.endswith(SUFIXO_GER):
+            continue
+        base = nome[: -len(SUFIXO_GER)]
+        par = ok[ok["modelo"] == nome].merge(ok[ok["modelo"] == base], on="fold", suffixes=("_ger", "_base"))
+        for m, menor_melhor in metricas.items():
+            if f"{m}_ger" not in par.columns:
+                continue
+            d = par[f"{m}_ger"] - par[f"{m}_base"]
+            linhas.append({
+                "tarefa": tarefa, "modelo_base": base, "metrica": m,
+                "base_media": par[f"{m}_base"].mean(), "com_geracao_media": par[f"{m}_ger"].mean(),
+                "delta_media": d.mean(), "delta_dp": d.std(),
+                "folds_melhor": int(((d < 0) if menor_melhor else (d > 0)).sum()), "n_folds": len(par),
+                "deltas_por_fold": " | ".join(f"{v:+.4f}" for v in d),
+            })
+    return pd.DataFrame(linhas)
+
+
 # --------------------------------------------------------------------------- #
 # 7. Ajuste final, previsões regionais e índice de expansão
 # --------------------------------------------------------------------------- #
 def ajustar_final(tarefa, spec, df, y, w, args, classes):
     cats = CATS_TAREFA1 if tarefa == "regressao" else []
-    fb = ConstrutorFeatures(tarefa, k=args.k, cats=cats, classes=classes).fit(df, y, w)
+    fb = ConstrutorFeatures(tarefa, k=args.k, cats=cats, classes=classes,
+                               geracao=args.com_geracao).fit(df, y, w)
     est, cols = treinar(spec, fb, fb.transform(df, treino=True), y, w, args.seed)
     return fb, est, cols
 
@@ -841,7 +895,7 @@ def _md(df: pd.DataFrame, cols: list[str], n: int | None = None) -> str:
     return "\n".join(linhas)
 
 
-def relatorio(r1, r2, reg, metodo_exp, melhor1, melhor2, args, n_amostra):
+def relatorio(r1, r2, reg, metodo_exp, melhor1, melhor2, args, n_amostra, abl=None):
     p1 = r1[r1["esquema"] == ESQUEMA_PRINCIPAL] if not r1.empty else r1
     p2 = r2[r2["esquema"] == ESQUEMA_PRINCIPAL] if not r2.empty else r2
     elig = reg[reg["PCT_CONSUMO"].notna()]
@@ -864,6 +918,14 @@ def relatorio(r1, r2, reg, metodo_exp, melhor1, melhor2, args, n_amostra):
         _md(elig.sort_values("INDICE_EXPANSAO", ascending=False),
             ["NOME_MUNICIPIO", "UF", "N_UC", "INDICE_EXPANSAO", "QUADRANTE"], 15),
     ]
+    if abl is not None and not abl.empty:
+        txt += [
+            "", "## Ablação — variáveis de geração (usinas liberadas, ANEEL/SIGA)",
+            "Mesmos folds para o modelo com e sem as variáveis `GER_*`. "
+            "Delta = com geração − sem geração; `folds_melhor` conta os folds em que a geração ajudou.", "",
+            _md(abl, ["tarefa", "modelo_base", "metrica", "base_media", "com_geracao_media",
+                      "delta_media", "folds_melhor", "n_folds"]),
+        ]
     (OUT_DIR / "relatorio.md").write_text("\n".join(txt), encoding="utf-8")
 
 
@@ -890,6 +952,9 @@ def parse_args():
     ap.add_argument("--min-uc", type=int, default=30, help="mínimo de UCs p/ entrar nos rankings")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--rapido", action="store_true", help="modo de teste rápido")
+    ap.add_argument("--com-geracao", action="store_true",
+                    help="acrescenta variantes '+ geração' (variáveis GER_* das usinas) e a ablação")
+    ap.add_argument("--saida", type=Path, default=None, help="pasta de resultados (padrão: modelagem/resultados)")
     a = ap.parse_args()
     if a.rapido:
         a.n_por_classe, a.folds, a.n_arvores = 15_000, 3, 150
@@ -898,8 +963,14 @@ def parse_args():
 
 
 def main():
+    global OUT_DIR
     args = parse_args()
+    if args.saida is not None:
+        OUT_DIR = args.saida.resolve()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    if args.com_geracao and not features_geracao.disponivel():
+        raise FileNotFoundError(f"--com-geracao requer {features_geracao.ARQUIVO_UGS_GEO} "
+                                "(rode tratamento_base/merge_municipios/georreferenciar_usinas.py)")
     t_ini = time.time()
     print("=" * 78)
     print(" COMPARAÇÃO DE ALGORITMOS DE ML — BDGD/ANEEL")
@@ -952,6 +1023,17 @@ def main():
 
     if r1.empty or r2.empty:
         raise RuntimeError("Nenhum modelo concluiu a validação — veja os erros nos CSVs *_por_fold.")
+
+    abl = None
+    if args.com_geracao:
+        abl = pd.concat([
+            ablacao_geracao(res1, "1 · consumo", {"RMSE_log": True, "R2_log": False, "MdAPE_pct": True,
+                                                 **{f"R2_log_{g}": False for g in classes}}),
+            ablacao_geracao(res2, "2 · GRU_TEN", {"LogLoss": True, "TVD_regional": True, "F1_macro": False}),
+        ], ignore_index=True)
+        abl.to_csv(OUT_DIR / "ablacao_geracao.csv", index=False, sep=";", decimal=",")
+        print("\n--- ABLAÇÃO: variáveis de geração (delta = com − sem) ---")
+        print(abl[["tarefa", "modelo_base", "metrica", "delta_media", "folds_melhor", "n_folds"]].to_string(index=False))
 
     def melhor(r, specs):
         nome = r[r["esquema"] == ESQUEMA_PRINCIPAL].iloc[0]["modelo"]
@@ -1029,7 +1111,7 @@ def main():
                 print(f"   [MGWR] falhou: {exc}")
 
     graficos(r1, r2, reg)
-    relatorio(r1, r2, reg, metodo_exp, best1.nome, best2.nome, args, len(df))
+    relatorio(r1, r2, reg, metodo_exp, best1.nome, best2.nome, args, len(df), abl)
 
     print("\nTop 10 — maior consumo anual:")
     print(elig.sort_values("ENE_TOTAL_kWh", ascending=False)[["NOME_MUNICIPIO", "UF", "ENE_TOTAL_kWh", "QUADRANTE"]]

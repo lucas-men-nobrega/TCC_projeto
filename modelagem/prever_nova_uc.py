@@ -28,6 +28,8 @@ import pandas as pd
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 RESULTADOS_DIR = PROJECT_DIR / "modelagem" / "resultados"
 ARQUIVO_PREVISOES = RESULTADOS_DIR / "previsoes_regionais_municipios.csv"
+# Gerado por validacao_expansao.py: mesmas colunas + selo de confiabilidade do índice de expansão
+ARQUIVO_VALIDADO = RESULTADOS_DIR / "previsoes_regionais_municipios_validado.csv"
 
 # Código IBGE da UF -> sigla (a coluna UF das bases BDGD vem com o código numérico)
 SIGLAS_UF = {
@@ -57,7 +59,10 @@ def carregar_base_previsoes() -> pd.DataFrame:
         print("=" * 70)
         sys.exit(1)
 
-    df = pd.read_csv(ARQUIVO_PREVISOES, sep=";", decimal=",")
+    # Usa a versão validada só se for posterior às previsões (senão o selo estaria desatualizado)
+    validado = (ARQUIVO_VALIDADO.exists()
+                and ARQUIVO_VALIDADO.stat().st_mtime >= ARQUIVO_PREVISOES.stat().st_mtime)
+    df = pd.read_csv(ARQUIVO_VALIDADO if validado else ARQUIVO_PREVISOES, sep=";", decimal=",")
     df["UF"] = df["UF"].map(sigla_uf)
     return df
 
@@ -142,6 +147,9 @@ def exibir_relatorio_regiao(res: pd.Series):
     print(f"• Classificação Estratégica: [{quad.upper()}]")
     if not pd.isna(idx_exp):
         print(f"• Índice de Expansão Regional: {numero_br(idx_exp * 100, 1)}% (percentil em relação aos demais municípios)")
+    selo = res.get("SELO_CONFIABILIDADE", np.nan)
+    if not pd.isna(selo):
+        print(f"• Confiabilidade do índice  : {selo} — {res.get('MOTIVO_SELO', '')}")
     if not pd.isna(pct_cons):
         print(f"• Nível de Consumo Relativo : {numero_br(pct_cons * 100, 1)}% (percentil nacional)")
     if not pd.isna(tend_mes):
