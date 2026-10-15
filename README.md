@@ -326,6 +326,10 @@ python modelagem/prever_nova_uc.py --municipio "Campinas" --uf SP
 python modelagem/prever_nova_uc.py --mun 3509502
 python modelagem/prever_nova_uc.py --lat -22.905 --lon -47.060
 python modelagem/prever_nova_uc.py --interativo
+
+# Pedido de ligação: consumo de uma nova UC com perfil declarado (melhor modelo da tarefa 1)
+python modelagem/prever_nova_uc.py --ligacao --municipio "Campinas" --uf SP --grupo-tensao MT --classe IN --cnae 10 --demanda-contratada 500 --carga-instalada 800
+python modelagem/prever_nova_uc.py --listar-categorias
 ```
 
 **4. Geração × consumo por UF** (≈ 1 min; usa as bases de consumo e de UGs):

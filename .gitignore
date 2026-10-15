@@ -19,3 +19,5 @@ Desktop.ini
 
 # Cache agregado gerado pelo painel (dashboard/server.py)
 dashboard/cache/
+# Modelos treinados (gerados por comparar_modelos_ml.py; podem ter centenas de MB)
+modelagem/resultados/modelos/

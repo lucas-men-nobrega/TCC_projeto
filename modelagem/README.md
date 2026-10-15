@@ -146,6 +146,31 @@ python modelagem/prever_nova_uc.py --mun 3509502
 python modelagem/prever_nova_uc.py --lat -22.905 --lon -47.060
 ```
 
+As consultas acima mostram a **nova UC genérica do município**, ou seja, sem perfil declarado. Os valores vêm da tabela regional, feita com o melhor modelo sem perfil e sem rede.
+
+### Pedido de ligação: consumo de UMA nova UC com perfil declarado
+Usa o **melhor modelo da Tarefa 1 no geral** (com perfil, rede, IBGE e geração), gravado pela comparação de modelos em `resultados/modelos/modelo_ligacao_tarefa1.joblib`. A pasta não é versionada, porque o arquivo do RF pode ter centenas de MB.
+
+```powershell
+# Indústria (CNAE 10, alimentos) em MT, com demanda contratada de 500 kW, em Campinas
+python modelagem/prever_nova_uc.py --ligacao --municipio "Campinas" --uf SP --grupo-tensao MT `
+    --classe IN --cnae 10 --demanda-contratada 500 --carga-instalada 800
+
+# Comércio em BT, por coordenadas
+python modelagem/prever_nova_uc.py --ligacao --lat -22.905 --lon -47.060 --grupo-tensao BT `
+    --classe CO1 --cnae 47 --fases ABC --carga-instalada 25
+
+# Categorias aceitas e valores padrão por grupo de tensão
+python modelagem/prever_nova_uc.py --listar-categorias
+```
+* **Entradas:** grupo de tensão (obrigatório); grupo tarifário, classe/subclasse, CNAE (divisão), fases, tensão de fornecimento e área urbana ou rural; carga instalada e demanda contratada (kW); consumidor livre; GD.
+* **Campos não informados** assumem o valor típico (moda ou mediana) do grupo de tensão. A saída diz qual campo veio do usuário e qual veio do padrão. Categorias que não aparecem no treino geram aviso e recebem o efeito médio.
+* **Inferidos da localização:** a distribuidora e o conjunto elétrico (os predominantes no município) e as variáveis do IBGE e de geração. A distribuidora pode ser trocada com `--distribuidora`.
+* **Saídas:**
+  * consumo anual e mensal previsto, com a correção de Duan para voltar do log para kWh;
+  * **faixa de 80%** tirada dos resíduos fora da amostra (validação espacial) do grupo de tensão;
+  * como referência, a nova UC genérica do município e o consumo médio das UCs existentes.
+
 ---
 
 ## 🏭 Geração × Consumo por UF: `analise_geracao_uf.py`

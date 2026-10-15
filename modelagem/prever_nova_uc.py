@@ -16,6 +16,9 @@ Exemplos de uso:
   python modelagem/prever_nova_uc.py --mun 3509502
   python modelagem/prever_nova_uc.py --lat -22.905 --lon -47.060
   python modelagem/prever_nova_uc.py --interativo
+  python modelagem/prever_nova_uc.py --ligacao --municipio "Campinas" --uf SP --grupo-tensao MT
+         --classe IN --cnae 10 --demanda-contratada 500 --carga-instalada 800
+  python modelagem/prever_nova_uc.py --listar-categorias
 """
 from __future__ import annotations
 
@@ -167,6 +170,153 @@ def exibir_relatorio_regiao(res: pd.Series):
         print("  -> Região de consumo moderado/baixo com ritmo padrão de conexões.")
     print("=" * 75 + "\n")
 
+# --------------------------------------------------------------------------- #
+# Modo "pedido de ligação": consumo previsto de UMA nova UC com perfil declarado
+# --------------------------------------------------------------------------- #
+ARQUIVO_MODELO = RESULTADOS_DIR / "modelos" / "modelo_ligacao_tarefa1.joblib"
+CAMPOS_PERFIL = {  # campo do modelo → (argumento, descrição)
+    "GRU_TAR": ("tarifa", "grupo tarifário (ex.: B1, B3, A4)"),
+    "CLAS_SUB": ("classe", "classe/subclasse (ex.: RE1, CO1, IN, RU1)"),
+    "CNAE2": ("cnae", "divisão CNAE, 2 dígitos (ex.: 47; aceita '4711-3/02')"),
+    "FAS_CON": ("fases", "fases da ligação (ex.: A, AB, ABC, ABCN)"),
+    "TEN_FORN": ("tensao_fornecimento", "código da tensão de fornecimento (BDGD)"),
+    "ARE_LOC": ("area", "área: UB (urbana) ou NU (não urbana)"),
+}
+
+
+def carregar_modelo_ligacao(caminho: Path) -> dict:
+    if not caminho.exists():
+        print("=" * 70)
+        print(f"[ERRO] Modelo do pedido de ligação não encontrado:\n       {caminho}")
+        print("\nEle é gravado pela comparação de modelos (melhor modelo da tarefa 1), por exemplo:")
+        print("       python modelagem/comparar_modelos_ml.py --grupos todos --alvo-anualizado")
+        print("=" * 70)
+        sys.exit(1)
+    import __main__
+    import joblib
+    import comparar_modelos_ml as cm
+    # Compatibilidade com pacotes gravados com as classes presas a "__main__"
+    for nome in ("ConstrutorFeatures", "ClassificadorAlinhado"):
+        if not hasattr(__main__, nome):
+            setattr(__main__, nome, getattr(cm, nome))
+    return joblib.load(caminho)
+
+
+def listar_categorias(pacote: dict):
+    print(f"Modelo: {pacote['modelo']} (grupos: {', '.join(pacote['grupos']) or 'nenhum'})\n")
+    for campo, (arg, desc) in CAMPOS_PERFIL.items():
+        niveis = pacote["niveis"].get(campo)
+        if niveis:
+            print(f"--{arg.replace('_', '-')}: {desc}\n   {', '.join(n for n in niveis if n != 'N/D')}\n")
+    print("Padrões por grupo de tensão (usados quando o campo não é informado):")
+    for g, p in pacote["padroes"].items():
+        print(f"   {g}: " + ", ".join(f"{k}={v}" for k, v in p.items() if v is not None))
+
+
+def prever_ligacao(args, df_reg: pd.DataFrame):
+    """Prevê o consumo anual de uma nova UC a partir do pedido de ligação (perfil declarado) e da
+    localização, com o pacote gravado por comparar_modelos_ml.py."""
+    import comparar_modelos_ml as cm  # importação pesada: só neste modo
+
+    pacote = carregar_modelo_ligacao(args.modelo or ARQUIVO_MODELO)
+    if args.listar_categorias:
+        listar_categorias(pacote)
+        return
+    g = (args.grupo_tensao or "").upper()
+    if g not in pacote["padroes"]:
+        print(f"[ERRO] Informe --grupo-tensao ({', '.join(pacote['padroes'])}).")
+        sys.exit(1)
+
+    # Localização → município (código IBGE) e coordenadas
+    if args.lat is not None and args.lon is not None:
+        ref = buscar_por_coordenadas(df_reg, args.lat, args.lon)
+        lat, lon = args.lat, args.lon
+    else:
+        if args.mun is not None:
+            sub = df_reg[df_reg["MUN"] == args.mun]
+        elif args.municipio:
+            m = df_reg["NOME_MUNICIPIO"].str.lower().str.contains(args.municipio.lower(), na=False)
+            if args.uf:
+                m &= df_reg["UF"] == args.uf.upper()
+            sub = df_reg[m]
+        else:
+            print("[ERRO] Informe a localização: --municipio/--uf, --mun ou --lat/--lon.")
+            sys.exit(1)
+        if sub.empty:
+            print("[ERRO] Município não encontrado.")
+            sys.exit(1)
+        ref = sub.iloc[0]
+        lat, lon = ref["LAT"], ref["LON"]
+    mun = str(int(ref["MUN"]))
+
+    # Perfil declarado: informado pelo usuário ou o valor típico do grupo de tensão
+    pad = pacote["padroes"][g]
+    usados, avisos = {}, []
+    for campo, (arg, _) in CAMPOS_PERFIL.items():
+        v = getattr(args, arg)
+        if campo == "CNAE2" and v:
+            v = "".join(ch for ch in str(v) if ch.isdigit())[:2]
+        if v in (None, ""):
+            v, origem = pad.get(campo, cm.NA), "padrão do grupo"
+        else:
+            origem = "informado"
+        v = str(v).upper() if campo not in ("CNAE2", "TEN_FORN") else str(v)
+        if campo in pacote["niveis"] and v not in pacote["niveis"][campo]:
+            avisos.append(f"{campo}='{v}' não aparece no treino → o modelo usa o efeito médio")
+        usados[campo] = (v, origem)
+    car = args.carga_instalada if args.carga_instalada is not None else pad.get("CAR_INST")
+    dem = args.demanda_contratada if args.demanda_contratada is not None else (pad.get("DEM_CONT") if g != "BT" else None)
+    dist = args.distribuidora or pacote["dist_mun"].get(mun, cm.NA)
+    conj = pacote["conj_mun"].get(mun, cm.NA)
+
+    linha = {"LAT": lat, "LON": lon, "MUN": mun, "GRU_TEN": g, "DIST": str(dist), "CONJ": str(conj),
+             "CAR_INST": car, "DEM_CONT": dem, "LIV": float(args.livre), "TEM_GD": float(args.gd),
+             **{c: v for c, (v, _) in usados.items()}}
+    X0 = pd.DataFrame([linha])
+    if pacote["agregados_conj"] is not None:
+        X0 = X0.merge(pacote["agregados_conj"], on=["DIST", "CONJ"], how="left")
+
+    fb = pacote["fb"]
+    F = fb.transform(X0)
+    X = cm.preparar_X(F, pacote["colunas"], pacote["cat"], fb.cats)
+    if pacote["cat"] == "onehot":
+        X = X.reindex(columns=pacote["cols_treino"], fill_value=0)
+    p_log = float(np.asarray(pacote["est"].predict(X), float).ravel()[0])
+    kwh = max(np.exp(p_log) * pacote["smear"] - 1, 0)
+    q10, q90 = pacote["faixa_residuos_log"].get(g, (np.nan, np.nan))
+    lo, hi = max(np.exp(p_log + q10) - 1, 0), max(np.exp(p_log + q90) - 1, 0)
+
+    print("\n" + "=" * 75)
+    print(f" PEDIDO DE LIGAÇÃO — {ref['NOME_MUNICIPIO']} ({ref['UF']}) · grupo {g}")
+    print("=" * 75)
+    print(f"• Modelo: {pacote['modelo']} (amostra de {numero_br(pacote['n_amostra'])} UCs"
+          f"{'; alvo anualizado' if pacote['alvo_anualizado'] else ''})")
+    print(f"• Localização: lat {lat:.4f}, lon {lon:.4f} · MUN {mun} · distribuidora {dist} · conjunto {conj}")
+    print("• Perfil declarado:")
+    for campo, (v, origem) in usados.items():
+        print(f"    - {campo:<9}: {v:<8} ({origem})")
+    print(f"    - CAR_INST : {numero_br(car, 1) if car else 'N/D'} kW "
+          f"({'informado' if args.carga_instalada is not None else 'padrão do grupo'})")
+    if g != "BT":
+        print(f"    - DEM_CONT : {numero_br(dem, 1) if dem else 'N/D'} kW "
+              f"({'informado' if args.demanda_contratada is not None else 'padrão do grupo'})")
+    print(f"    - Consumidor livre: {'sim' if args.livre else 'não'} · GD na UC: {'sim' if args.gd else 'não'}")
+    for a in avisos:
+        print(f"  [AVISO] {a}")
+
+    print("\n" + "-" * 75)
+    print(f" CONSUMO PREVISTO: {formatar_energia(kwh)}  (~{numero_br(kwh / 12)} kWh/mês)")
+    print(f" Faixa de 80% (resíduos fora da amostra do grupo {g}): {formatar_energia(lo)} a {formatar_energia(hi)}")
+    print("-" * 75)
+    tipico = ref.get(f"CONSUMO_PREV_NOVA_UC_{g}_kWh", np.nan)
+    if not pd.isna(tipico):
+        print(f"• Referência — nova UC {g} genérica no município (sem perfil): {formatar_energia(tipico)}")
+    print(f"• Referência — consumo médio das UCs existentes no município: {formatar_energia(ref.get('ENE_MEDIA_UC_kWh'))}")
+    print("\nA faixa reflete o erro típico do modelo fora da amostra (validação espacial), não a variação")
+    print("do consumo da UC ao longo do ano. Campos não informados assumem o valor típico do grupo.")
+    print("=" * 75 + "\n")
+
+
 def modo_interativo(df: pd.DataFrame):
     print("=" * 75)
     print(" MODO INTERATIVO — PREVISÃO DE CONSUMO E EXPANSÃO REGIONAL")
@@ -214,9 +364,25 @@ def main():
     parser.add_argument("--lat", type=float, help="Latitude geográfica (ex: -22.905)")
     parser.add_argument("--lon", type=float, help="Longitude geográfica (ex: -47.060)")
     parser.add_argument("--interativo", "-i", action="store_true", help="Inicia o modo interativo de perguntas e respostas")
+    lig = parser.add_argument_group("pedido de ligação (--ligacao): consumo de UMA nova UC com perfil declarado")
+    lig.add_argument("--ligacao", action="store_true", help="Prevê o consumo de uma nova UC a partir do pedido de ligação")
+    lig.add_argument("--grupo-tensao", choices=["BT", "MT", "AT"], help="Grupo de tensão da nova UC")
+    for campo, (arg, desc) in CAMPOS_PERFIL.items():
+        lig.add_argument(f"--{arg.replace('_', '-')}", dest=arg, type=str, help=desc)
+    lig.add_argument("--carga-instalada", type=float, help="Carga instalada declarada (kW)")
+    lig.add_argument("--demanda-contratada", type=float, help="Demanda contratada (kW; MT/AT)")
+    lig.add_argument("--livre", action="store_true", help="Consumidor livre")
+    lig.add_argument("--gd", action="store_true", help="UC com geração distribuída")
+    lig.add_argument("--distribuidora", type=str, help="Código DIST (padrão: a predominante no município)")
+    lig.add_argument("--modelo", type=Path, help=f"Pacote do modelo (padrão: {ARQUIVO_MODELO})")
+    lig.add_argument("--listar-categorias", action="store_true", help="Lista as categorias aceitas e os padrões")
     args = parser.parse_args()
 
     df = carregar_base_previsoes()
+
+    if args.ligacao or args.listar_categorias:
+        prever_ligacao(args, df)
+        return
 
     if args.interativo:
         modo_interativo(df)

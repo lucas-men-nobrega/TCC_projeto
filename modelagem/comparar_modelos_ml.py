@@ -950,6 +950,59 @@ def ajustar_final(tarefa, spec, df, y, w, args, classes):
     return fb, est, cols
 
 
+ARQUIVO_MODELO_LIGACAO = "modelo_ligacao_tarefa1.joblib"
+VERSAO_MODELO_LIGACAO = 1
+
+
+def salvar_modelo_ligacao(spec, df, y, w, args, classes, oof, lf_base, conj) -> None:
+    """Grava o pacote usado por prever_nova_uc.py --ligacao: o melhor modelo da tarefa 1 no geral
+    (com perfil declarado e rede, quando avaliados), reajustado na amostra completa.
+
+    O Espec guarda funções (lambdas) que o pickle não serializa: o pacote leva o resultado delas
+    (lista de colunas e modo de categorias), suficiente para preparar_X e para prever."""
+    import importlib
+    import joblib
+    fb, est, cols = ajustar_final("regressao", spec, df, y, w, args, classes)
+    # Rodando como script, a classe pertence a "__main__" e o pickle ficaria preso a ele (outro script
+    # não conseguiria carregar): grava com a classe do módulo importável comparar_modelos_ml
+    if type(fb).__module__ == "__main__":
+        fb.__class__ = importlib.import_module("comparar_modelos_ml").ConstrutorFeatures
+    ok = ~np.isnan(oof)
+    smear = float(np.average(np.exp(y[ok] - oof[ok]), weights=w[ok])) if ok.any() else 1.0
+    res = pd.DataFrame({"GRU_TEN": df["GRU_TEN"].to_numpy()[ok], "r": (y - oof)[ok]})
+    faixa = {g: (float(s["r"].quantile(0.10)), float(s["r"].quantile(0.90))) for g, s in res.groupby("GRU_TEN")}
+
+    # Distribuidora e conjunto elétrico predominantes por município (UCs ativas da base completa)
+    dom = _coletar(lf_base.filter(pl.col("MUN") != NA).group_by("MUN", "DIST", "CONJ").agg(pl.len().alias("N"))
+                   ).to_pandas().sort_values("N", ascending=False)
+    dist_mun = dom.groupby(["MUN", "DIST"])["N"].sum().reset_index().sort_values("N", ascending=False) \
+        .drop_duplicates("MUN").set_index("MUN")["DIST"].to_dict()
+    conj_mun = dom.drop_duplicates("MUN").set_index("MUN")["CONJ"].to_dict()
+
+    # Valores típicos (moda ponderada) de cada campo do perfil por grupo de tensão — padrão quando o
+    # usuário não informa o campo; e mediana da carga instalada / demanda contratada
+    padroes = {}
+    for g, d in df.groupby("GRU_TEN"):
+        padroes[g] = {c: d.groupby(c)["PESO"].sum().idxmax() for c in ["GRU_TAR", *PERFIL_CATS] if c in d}
+        for c in ("CAR_INST", "DEM_CONT"):
+            v = pd.to_numeric(d[c], errors="coerce")
+            padroes[g][c] = float(v[v > 0].median()) if (v > 0).any() else None
+    niveis = {c: sorted(map(str, fb.te[c])) for c in fb.te}  # categorias vistas no treino
+
+    pacote = {
+        "versao": VERSAO_MODELO_LIGACAO, "modelo": spec.nome, "grupos": sorted(args.grupos),
+        "alvo_anualizado": bool(args.alvo_anualizado), "colunas": spec.colunas(fb.grupos), "cat": spec.cat,
+        "fb": fb, "est": est, "cols_treino": cols, "smear": smear, "faixa_residuos_log": faixa,
+        "classes": classes, "dist_mun": dist_mun, "conj_mun": conj_mun,
+        "agregados_conj": conj, "padroes": padroes, "niveis": niveis,
+        "n_amostra": len(df), "data_base": ANO_DATA_BASE,
+    }
+    destino = OUT_DIR / "modelos"
+    destino.mkdir(parents=True, exist_ok=True)
+    joblib.dump(pacote, destino / ARQUIVO_MODELO_LIGACAO, compress=3)
+    print(f"   Modelo do pedido de ligação gravado: {spec.nome} → {destino / ARQUIVO_MODELO_LIGACAO}")
+
+
 def salvar_importancia(est, cols, nome_arq):
     imp = getattr(est, "feature_importances_", None)
     if imp is None:
@@ -1272,6 +1325,11 @@ def main():
     oof = oof1[(ESQUEMA_PRINCIPAL, best1.nome)]
     ok = ~np.isnan(oof)
     smear = float(np.average(np.exp(y1[ok] - oof[ok]), weights=w[ok])) if ok.any() else 1.0
+
+    # Modelo do "pedido de ligação" (prever_nova_uc.py --ligacao): o melhor da tarefa 1 no geral
+    spec_lig = next(s for s in specs1 if s.nome == melhor_geral1)
+    salvar_modelo_ligacao(spec_lig, df, y1, w, args, classes, oof1[(ESQUEMA_PRINCIPAL, spec_lig.nome)],
+                          lf_base, conj if "rede" in args.grupos else None)
 
     # ------------------------------------------------- previsões regionais
     print("\n[5/6] Agregando municípios (base completa) e prevendo...")
