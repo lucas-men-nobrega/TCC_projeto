@@ -10,12 +10,21 @@ ARQUIVO_DESTINO = BASE_DIR / "filtrados" / "alta_tensao_filtrada.parquet"
 COLUNAS_ENERGIA_P = [f"ENE_P_{i:02d}" for i in range(1, 13)]
 COLUNAS_ENERGIA_F = [f"ENE_F_{i:02d}" for i in range(1, 13)]
 
+# DEM_CONT só existe em MT/AT (o filtro avisa a ausência na BT). TIP_CC e DEM_P_/DEM_F_ ficam de fora:
+# são atribuídos ou medidos a partir do consumo (vazamento do alvo da Tarefa 1).
+COLUNAS_PERFIL = ["CLAS_SUB", "CNAE", "FAS_CON", "TEN_FORN", "ARE_LOC", "CAR_INST", "DEM_CONT", "LIV", "CEG_GD"]
+
 COLUNAS_ALVO = [
     "MUN",
     "GRU_TEN",
     "GRU_TAR",
     "SIT_ATIV",
     "DAT_CON",
+    # Perfil declarado da UC (conhecido no pedido de ligação) e distribuidora
+    *COLUNAS_PERFIL,
+    "DIST",
+    # Rede: conjunto elétrico, subestação e alimentador (CTMT em MT/BT; CTAT na AT)
+    "CONJ", "SUB", "CTMT", "CTAT",
     *COLUNAS_ENERGIA_P,
     *COLUNAS_ENERGIA_F,
     "POINT_X",

@@ -44,7 +44,7 @@ from __future__ import annotations
 import argparse
 import time
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -56,12 +56,13 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.gaussian_process import GaussianProcessClassifier, GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel, WhiteKernel
 from sklearn.linear_model import Ridge
-from sklearn.metrics import balanced_accuracy_score, f1_score, log_loss
+from sklearn.metrics import average_precision_score, balanced_accuracy_score, f1_score, log_loss
 from sklearn.model_selection import GroupKFold, KFold
 from sklearn.neighbors import BallTree
 from sklearn.preprocessing import StandardScaler
 
-import features_geracao  # variáveis GER_* das usinas liberadas (--com-geracao)
+import features_geracao  # variáveis GER_* das usinas liberadas (grupo "ger")
+import features_ibge     # variáveis IBGE_* do município (grupo "ibge")
 
 warnings.filterwarnings("ignore")
 
@@ -184,18 +185,51 @@ def _lazy_fonte(sigla: str, caminho: Path, incluir_inativas: bool) -> tuple[pl.L
     else:
         ano = pl.col("DAT_CON").cast(pl.Utf8).str.extract(r"(\d{4})", 1).cast(pl.Int32, strict=False)
 
+    # Mês de ligação ("dd/mm/aaaa" na BDGD; aceita também "aaaa-mm-dd") — anualização do alvo
+    if not tem_dat:
+        mes = pl.lit(None, pl.Int32)
+    elif schema["DAT_CON"].is_temporal():
+        mes = pl.col("DAT_CON").dt.month().cast(pl.Int32)
+    else:
+        d = pl.col("DAT_CON").cast(pl.Utf8).str.strip_chars()
+        mes = pl.coalesce(d.str.extract(r"^\d{2}/(\d{2})/\d{4}", 1), d.str.extract(r"^\d{4}-(\d{2})-", 1)) \
+            .cast(pl.Int32, strict=False)
+
     # Coordenada medida na própria UC (False quando o ETL imputou a sede do município)
     coord_uc = (pl.col("COORD_ORIGEM") == "UC") if "COORD_ORIGEM" in nomes else pl.lit(True)
+
+    # Perfil declarado da UC (grupo "perfil" da ablação; conhecido no pedido de ligação)
+    def num_ou_nulo(c):
+        return (_num(c, schema[c]) if c in nomes else pl.lit(None, pl.Float64)).alias(c)
+    gd = pl.col("CEG_GD").cast(pl.Utf8).str.strip_chars() if "CEG_GD" in nomes else pl.lit(None, pl.Utf8)
+    perfil = [
+        txt("CLAS_SUB"), txt("FAS_CON"), txt("ARE_LOC"), txt("TEN_FORN"),
+        # Rede (grupo "rede"): distribuidora e conjunto elétrico
+        txt("DIST"), txt("CONJ"),
+        # CNAE "0151-2/01" → divisão "01" (87 valores, em vez de 1.300 subclasses)
+        (pl.col("CNAE").cast(pl.Utf8).str.strip_chars().str.slice(0, 2).fill_null(NA)
+         if "CNAE" in nomes else pl.lit(NA)).alias("CNAE2"),
+        num_ou_nulo("CAR_INST"), num_ou_nulo("DEM_CONT"), num_ou_nulo("LIV"),
+        # GD na UC: código preenchido e diferente do marcador "GD.UF.000.000.000"
+        (gd.is_not_null() & (gd != "") & ~gd.str.contains(r"000\.000\.000$")).fill_null(False)
+        .cast(pl.Float64).alias("TEM_GD"),
+    ]
+    ano_ok = pl.when(ano <= ANO_DATA_BASE).then(ano).otherwise(None)  # descarta datas futuras
 
     q = q.select(
         pl.lit(sigla).alias("FONTE"), *[txt(c) for c in COLS_TEXTO],
         lon.alias("LON"), lat.alias("LAT"), *exprs_mes,
-        pl.when(ano <= ANO_DATA_BASE).then(ano).otherwise(None).alias("ANO_CON"),  # descarta datas futuras
-        coord_uc.alias("_COORD_UC"),
+        ano_ok.alias("ANO_CON"), mes.alias("MES_CON"),
+        coord_uc.alias("_COORD_UC"), *perfil,
     ).with_columns(
         pl.sum_horizontal([f"M{m:02d}" for m in range(1, 13)]).alias("ENE"),
         (pl.col("LON").is_between(BBOX_BRASIL[0], BBOX_BRASIL[2])
          & pl.col("LAT").is_between(BBOX_BRASIL[1], BBOX_BRASIL[3])).fill_null(False).alias("_GEO"),
+    ).with_columns(
+        # UC ligada no próprio ano da data-base só consumiu (13 − mês) meses: anualiza (--alvo-anualizado)
+        pl.when((pl.col("ANO_CON") == ANO_DATA_BASE) & (pl.col("MES_CON").is_between(2, 12)))
+        .then(pl.col("ENE") * 12 / (13 - pl.col("MES_CON")))
+        .otherwise(pl.col("ENE")).alias("ENE_ANUAL"),
     )
     if not incluir_inativas and "SIT_ATIV" in nomes:
         q = q.filter(pl.col("SIT_ATIV").str.to_uppercase().is_in(["AT", "ATIVO", "1"]))
@@ -217,6 +251,25 @@ def carregar_bases(incluir_inativas: bool) -> tuple[pl.LazyFrame, bool]:
     return pl.concat(partes, how="vertical_relaxed"), tem_dat
 
 
+def agregados_rede(lf: pl.LazyFrame) -> pd.DataFrame:
+    """Agregados por conjunto elétrico (DIST, CONJ) sobre TODAS as UCs ativas, sem o consumo
+    (o alvo da tarefa 1): tamanho, % MT/AT e % não urbana.
+    O alimentador (CTMT/CTAT) NÃO é usado: o registro depende da tabela da BDGD — 67% das UCs de BT
+    vêm sem alimentador, a MT quase sempre tem, e cada UC de AT tem o próprio circuito (mediana de
+    1 UC). Tamanho e preenchimento do alimentador revelam o GRU_TEN (vazamento na tarefa 2) e são
+    artefato de cadastro, não informação física da rede."""
+    base = lf.with_columns(
+        (pl.col("GRU_TEN") == "MT").cast(pl.Float64).alias("_MT"),
+        (pl.col("GRU_TEN") == "AT").cast(pl.Float64).alias("_AT"),
+        (pl.col("ARE_LOC") == "NU").cast(pl.Float64).alias("_RURAL"),
+    )
+    conj = _coletar(base.filter(pl.col("CONJ") != NA).group_by("DIST", "CONJ").agg(
+        pl.len().log1p().alias("REDE_LOG_N_CONJ"), pl.col("_MT").mean().alias("REDE_PCT_MT_CONJ"),
+        pl.col("_AT").mean().alias("REDE_PCT_AT_CONJ"), pl.col("_RURAL").mean().alias("REDE_PCT_RURAL_CONJ"),
+    )).to_pandas()
+    return conj
+
+
 def amostrar(lf: pl.LazyFrame, n_por_classe: int, seed: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Amostra estratificada por GRU_TEN (até n_por_classe UCs por grupo).
     PESO = N_populacao / N_amostra do grupo → restaura a distribuição real em treino e métricas."""
@@ -228,6 +281,9 @@ def amostrar(lf: pl.LazyFrame, n_por_classe: int, seed: int) -> tuple[pd.DataFra
         .with_columns(((pl.struct(["LAT", "LON", "ENE", "MUN", "GRU_TAR"]).hash(seed) % MOD)
                        .cast(pl.Float64) / MOD).alias("_U"))
         .filter(pl.col("_U") < pl.col("FRAC"))
+        # Ordem estável: a coleta em streaming não preserva a ordem das linhas, e os blocos
+        # K-means (MiniBatch) dependem dela → sem ordenar, cada rodada teria folds diferentes
+        .sort(["_U", "GRU_TEN", "LAT", "LON", "ENE", "MUN", "GRU_TAR", "ANO_CON", "FONTE"], nulls_last=True)
         .drop(["_U", "FRAC"])
     )
     df = _coletar(am).to_pandas()
@@ -278,14 +334,29 @@ class ConstrutorFeatures:
       No treino exclui a própria UC (leave-self-out) → sem vazamento.
     • Densidade: log da distância (km) ao 1º e ao k-ésimo vizinho.
     • Target encoding suavizado das categorias (tarefa 1) — usado por GWR e krigagem.
+    • Grupos opcionais (ablação, --grupos):
+      ger    — variáveis GER_* das usinas no entorno (features_geracao.py);
+      perfil — perfil declarado da UC (só tarefa 1): target encoding por fold de classe, CNAE,
+               fases, tensão de fornecimento e área; log da carga instalada e da demanda contratada;
+               consumidor livre e GD. Na tarefa 2 ficaria de fora por vazamento (DEM_CONT e
+               TEN_FORN determinam o próprio GRU_TEN);
+      ibge   — contexto do município (Censo 2022/2010 e PIB dos Municípios): população,
+               densidade, crescimento, urbanização, PIB per capita e composição setorial;
+      rede   — distribuidora (target encoding por fold; na tarefa 2, proporção de cada GRU_TEN
+               por DIST no treino) e agregados do conjunto elétrico calculados sem o alvo
+               (agregados_rede). Na tarefa 2 a composição MT/AT do conjunto fica de fora: inclui o
+               GRU_TEN da própria UC (vazamento). O alimentador não entra (ver agregados_rede).
     """
     SUAVIZACAO = 20
 
     def __init__(self, tarefa: str, k: int = 15, rotacoes=(15, 30, 45, 60), cats=(), classes=(),
-                 geracao: bool = False):
+                 grupos=frozenset()):
         self.tarefa, self.k, self.rotacoes = tarefa, k, tuple(rotacoes)
         self.cats, self.classes = list(cats), list(classes)
-        self.geracao = geracao  # acrescenta as variáveis GER_* (features_geracao.py)
+        self.geracao = "ger" in grupos
+        self.ibge = "ibge" in grupos
+        self.rede = "rede" in grupos
+        self.perfil = "perfil" in grupos and tarefa == "regressao"
 
     # ---------------------------------------------------------------- fit
     def fit(self, df: pd.DataFrame, y, w):
@@ -296,13 +367,24 @@ class ConstrutorFeatures:
             self.y = np.asarray(y, float)
             self.prior = float(np.average(self.y, weights=self.w))
             self.te = {}
-            for c in self.cats:
+            for c in self.cats + (PERFIL_CATS if self.perfil else []) + (["DIST"] if self.rede else []):
                 g = pd.DataFrame({"c": df[c].astype(str).to_numpy(), "wy": self.w * self.y, "w": self.w})
                 g = g.groupby("c").agg(wy=("wy", "sum"), w=("w", "sum"), n=("w", "size"))
                 media = g["wy"] / g["w"]
                 self.te[c] = ((media * g["n"] + self.prior * self.SUAVIZACAO) / (g["n"] + self.SUAVIZACAO)).to_dict()
         else:
             self.Y = np.eye(len(self.classes))[np.asarray(y, int)]
+            if self.rede:
+                # Proporção (ponderada, suavizada p/ a média global) de cada GRU_TEN por distribuidora
+                WY = self.Y * self.w[:, None]
+                g = pd.DataFrame(WY, columns=self.classes).assign(DIST=df["DIST"].astype(str).to_numpy(),
+                                                                  _w=self.w, _n=1)
+                g = g.groupby("DIST").sum()
+                self.prior_cls = WY.sum(0) / self.w.sum()
+                prop = g[self.classes].to_numpy() / g[["_w"]].to_numpy()
+                n = g[["_n"]].to_numpy()
+                self.te_dist_cls = pd.DataFrame((prop * n + self.prior_cls * self.SUAVIZACAO) / (n + self.SUAVIZACAO),
+                                                index=g.index, columns=self.classes)
         self.niveis = {c: sorted(df[c].astype(str).unique()) for c in self.cats}
         return self
 
@@ -350,6 +432,35 @@ class ConstrutorFeatures:
             # Fonte externa (usinas liberadas até a data-base): sem ajuste por fold, sem vazamento
             G = features_geracao.variaveis_geracao(lat, lon, ano_max=ANO_DATA_BASE)
             F[features_geracao.COLUNAS_GER] = G.to_numpy()
+        if self.ibge:
+            # Fonte externa; usa o MUN da UC ou, sem ele (previsões regionais), a sede mais próxima
+            I = features_ibge.variaveis_ibge(lat, lon, df["MUN"].to_numpy() if "MUN" in df else None)
+            F[features_ibge.COLUNAS_IBGE] = I.to_numpy()
+        if self.rede:
+            num = lambda c: (pd.to_numeric(df[c], errors="coerce") if c in df
+                             else pd.Series(np.nan, index=df.index))
+            if self.tarefa == "regressao":
+                v = df["DIST"].astype(str) if "DIST" in df else pd.Series(NA, index=df.index)
+                F["TE_DIST"] = v.map(self.te["DIST"]).fillna(self.prior).to_numpy(float)
+            else:
+                v = df["DIST"].astype(str) if "DIST" in df else pd.Series(NA, index=df.index)
+                P = self.te_dist_cls.reindex(v.to_numpy()).to_numpy()
+                P = np.where(np.isnan(P), self.prior_cls, P)
+                for j, nm in enumerate(self.classes):
+                    F[f"REDE_P_{nm}"] = P[:, j]
+            for c in COLUNAS_REDE:  # ausente (ex.: previsões regionais) → −1
+                F[c] = num(c).fillna(-1).to_numpy()
+        if self.perfil:
+            # Ausente no cenário "nova UC sem perfil" (previsão regional): prior / −1
+            for c in PERFIL_CATS:
+                v = df[c].astype(str) if c in df else pd.Series(NA, index=df.index)
+                F[f"TE_{c}"] = v.map(self.te[c]).fillna(self.prior).to_numpy(float)
+            num = lambda c: (pd.to_numeric(df[c], errors="coerce") if c in df
+                             else pd.Series(np.nan, index=df.index))
+            F["LOG_CAR_INST"] = np.log1p(num("CAR_INST").where(lambda x: x > 0)).fillna(-1).to_numpy()
+            F["LOG_DEM_CONT"] = np.log1p(num("DEM_CONT").where(lambda x: x > 0)).fillna(-1).to_numpy()
+            F["LIV"] = num("LIV").fillna(0).to_numpy()
+            F["TEM_GD"] = num("TEM_GD").fillna(0).to_numpy()
         for c in self.cats:
             v = df[c].astype(str)
             F[c] = pd.Categorical(v.where(v.isin(self.niveis[c])), categories=self.niveis[c])
@@ -366,16 +477,32 @@ class ConstrutorFeatures:
             "te": [f"TE_{c}" for c in self.cats] if self.tarefa == "regressao" else [],
             "cats": list(self.cats),
             "ger": list(features_geracao.COLUNAS_GER) if self.geracao else [],
+            "ibge": list(features_ibge.COLUNAS_IBGE) if self.ibge else [],
+            "rede": ((["TE_DIST"] + COLUNAS_REDE) if self.tarefa == "regressao"
+                     else [f"REDE_P_{c}" for c in self.classes] + COLUNAS_REDE_SEM_ALVO) if self.rede else [],
+            "perfil": ([f"TE_{c}" for c in PERFIL_CATS] + ["LOG_CAR_INST", "LOG_DEM_CONT", "LIV", "TEM_GD"]
+                       if self.perfil else []),
         }
 
 
 def cols_basico(g):   return g["coords"] + g["cats"]
 def cols_espacial(g): return g["coords"] + g["rot"] + g["knn"] + g["te"] + g["cats"]
-def cols_basico_ger(g):   return cols_basico(g) + g["ger"]
-def cols_espacial_ger(g): return cols_espacial(g) + g["ger"]
 
 
-SUFIXO_GER = " + geração"  # variantes da ablação: mesmo modelo, com as variáveis GER_*
+# Grupos de variáveis avaliados por ablação (--grupos): nome do grupo → sufixo das variantes.
+# Cada grupo gera "<modelo> + <grupo>" dos MODELOS_ABLACAO, com as mesmas colunas + as do grupo.
+SUFIXOS_GRUPO = {"ger": " + geração", "perfil": " + perfil", "ibge": " + IBGE", "rede": " + rede",
+                 "todos": " + todos"}
+GRUPO_TODOS = "todos"  # variante combinada: união dos demais grupos ativos
+GRUPOS_SO_REGRESSAO = {"perfil"}
+# Grupos que dependem de dados da UC indisponíveis no cenário "nova UC num município" (perfil
+# declarado, conjunto/alimentador): os modelos com eles não são usados nas previsões regionais
+GRUPOS_FORA_REGIONAL = {"perfil", "rede", "todos"}
+# Agregados de rede calculados sobre todas as UCs ativas, sem o consumo (agregados_rede)
+COLUNAS_REDE = ["REDE_LOG_N_CONJ", "REDE_PCT_MT_CONJ", "REDE_PCT_AT_CONJ", "REDE_PCT_RURAL_CONJ"]
+COLUNAS_REDE_SEM_ALVO = ["REDE_LOG_N_CONJ", "REDE_PCT_RURAL_CONJ"]  # tarefa 2: sem a composição MT/AT
+MODELOS_ABLACAO = ["Random Forest padrão (lat/lon)", "CatBoost (feat. espaciais)", "LightGBM (feat. espaciais)"]
+PERFIL_CATS = ["CLAS_SUB", "CNAE2", "FAS_CON", "TEN_FORN", "ARE_LOC"]
 
 
 # --------------------------------------------------------------------------- #
@@ -541,16 +668,11 @@ def especificacoes(tarefa: str, args, n_cls: int = 0) -> list[Espec]:
     E.append(Espec("Baseline · kNN espacial", "Linha de base", lambda g: g["knn"], "none",
                    lambda: BaselineKNN(tarefa)))
 
-    ger = getattr(args, "com_geracao", False)
     if lgb:
         par = dict(n_estimators=nt, learning_rate=0.05, num_leaves=63, min_child_samples=30,
                    subsample=0.8, subsample_freq=1, colsample_bytree=0.8, n_jobs=-1, verbose=-1, random_state=s)
         E.append(Espec("LightGBM (feat. espaciais)", "Gradient Boosting", cols_espacial, "category",
                        lambda par=par: wrap(lgb.LGBMRegressor(**par) if reg else lgb.LGBMClassifier(**par))))
-        if ger:
-            E.append(Espec("LightGBM (feat. espaciais)" + SUFIXO_GER, "Gradient Boosting", cols_espacial_ger,
-                           "category",
-                           lambda par=par: wrap(lgb.LGBMRegressor(**par) if reg else lgb.LGBMClassifier(**par))))
     if xgb:
         par = dict(n_estimators=nt, learning_rate=0.05, max_depth=8, subsample=0.8, colsample_bytree=0.8,
                    tree_method="hist", enable_categorical=True, n_jobs=-1, random_state=s)
@@ -562,20 +684,12 @@ def especificacoes(tarefa: str, args, n_cls: int = 0) -> list[Espec]:
         E.append(Espec("CatBoost (feat. espaciais)", "Gradient Boosting", cols_espacial, "str",
                        lambda par=par: wrap(cb.CatBoostRegressor(**par) if reg else
                                     cb.CatBoostClassifier(loss_function="MultiClass", **par))))
-        if ger:
-            E.append(Espec("CatBoost (feat. espaciais)" + SUFIXO_GER, "Gradient Boosting", cols_espacial_ger,
-                           "str",
-                           lambda par=par: wrap(cb.CatBoostRegressor(**par) if reg else
-                                        cb.CatBoostClassifier(loss_function="MultiClass", **par))))
 
     par_rf = dict(n_estimators=max(100, nt // 2), min_samples_leaf=5, max_features=0.5,
                   max_samples=0.5, n_jobs=-1, random_state=s)
     RF = RandomForestRegressor if reg else RandomForestClassifier
     E.append(Espec("Random Forest padrão (lat/lon)", "Random Forest", cols_basico, "onehot",
                    lambda: wrap(RF(**par_rf))))
-    if ger:
-        E.append(Espec("Random Forest padrão (lat/lon)" + SUFIXO_GER, "Random Forest", cols_basico_ger, "onehot",
-                       lambda: wrap(RF(**par_rf))))
     E.append(Espec("Random Forest espacial (RF-sp)", "Random Forest", cols_espacial, "onehot",
                    lambda: wrap(RF(**par_rf))))
 
@@ -593,6 +707,23 @@ def especificacoes(tarefa: str, args, n_cls: int = 0) -> list[Espec]:
         if not args.sem_gp:
             E.append(Espec("GP classificador (RBF)", "Processo Gaussiano", lambda g: ["LAT", "LON"], "none",
                            lambda: GPClassificador(args.n_gp, n_cls, s)))
+
+    # Variantes da ablação: mesmo modelo (mesma fábrica e parâmetros) + as colunas do grupo
+    grupos = getattr(args, "grupos", set())
+    individuais = sorted(g for g in grupos if g != GRUPO_TODOS)
+    bases = [e for e in E if e.nome in MODELOS_ABLACAO]
+    for grupo in individuais:
+        if grupo in GRUPOS_SO_REGRESSAO and not reg:
+            continue
+        for base in bases:
+            E.append(replace(base, nome=base.nome + SUFIXOS_GRUPO[grupo],
+                             colunas=lambda g, c=base.colunas, gr=grupo: c(g) + g[gr]))
+    # Variante combinada: união de todos os grupos ativos (perfil some sozinho na tarefa 2,
+    # porque ConstrutorFeatures só o ativa na regressão)
+    if GRUPO_TODOS in grupos:
+        for base in bases:
+            E.append(replace(base, nome=base.nome + SUFIXOS_GRUPO[GRUPO_TODOS],
+                             colunas=lambda g, c=base.colunas: c(g) + [x for gr in individuais for x in g[gr]]))
     return E
 
 
@@ -657,7 +788,7 @@ def metricas_regressao(y, p, w, grupos) -> dict:
     return m
 
 
-def metricas_classificacao(y, P, w, regiao, n_cls: int, min_reg: int = 30) -> dict:
+def metricas_classificacao(y, P, w, regiao, n_cls: int, min_reg: int = 30, classes=None) -> dict:
     P = np.clip(P, 1e-7, 1)
     P = P / P.sum(1, keepdims=True)
     pred = P.argmax(1)
@@ -675,6 +806,12 @@ def metricas_classificacao(y, P, w, regiao, n_cls: int, min_reg: int = 30) -> di
         # Distância de variação total entre a distribuição observada e a prevista de GRU_TEN por município
         "TVD_regional": float(0.5 * np.abs(obs - prd).sum(1).mean()) if len(g) else np.nan,
         "n_regioes_TVD": int(len(g)),
+        # Por classe (uma contra as demais, ponderado): as probabilidades ordenam bem as UCs de MT/AT
+        # mesmo quando o argmax é sempre BT? A AUC-PR de um modelo sem informação = prevalência.
+        **{f"AUC_PR_{c}": float(average_precision_score(Y[:, j], P[:, j], sample_weight=w))
+           for j, c in enumerate(classes or []) if c != "BT" and 0 < Y[:, j].sum() < len(y)},
+        **{f"Prevalencia_{c}": float(np.average(Y[:, j], weights=w))
+           for j, c in enumerate(classes or []) if c != "BT"},
     }
 
 
@@ -682,12 +819,21 @@ def metricas_classificacao(y, P, w, regiao, n_cls: int, min_reg: int = 30) -> di
 # 6. Validação cruzada
 # --------------------------------------------------------------------------- #
 def criar_splits(df: pd.DataFrame, args) -> dict[str, list]:
-    if args.tipo_bloco == "municipio":
-        grupos = pd.factorize(df["MUN"])[0]
-    else:
-        grupos = MiniBatchKMeans(n_clusters=args.n_blocos, random_state=args.seed, n_init=3,
-                                 batch_size=4096).fit_predict(_proj_km(df["LAT"], df["LON"]))
-    splits = {ESQUEMA_PRINCIPAL: list(GroupKFold(n_splits=args.folds).split(df, groups=grupos))}
+    """Folds da CV espacial. Com --repeticoes R > 1, repete a partição com blocos K-means de
+    sementes diferentes: os folds ficam numerados em sequência (repetição r → folds r·k+1 … (r+1)·k)."""
+    repeticoes = getattr(args, "repeticoes", 1)
+    if args.tipo_bloco == "municipio" and repeticoes > 1:
+        print("   [AVISO] blocos = municípios são fixos: --repeticoes ignorado (repetições seriam idênticas).")
+        repeticoes = 1
+    folds = []
+    for r in range(repeticoes):
+        if args.tipo_bloco == "municipio":
+            grupos = pd.factorize(df["MUN"])[0]
+        else:
+            grupos = MiniBatchKMeans(n_clusters=args.n_blocos, random_state=args.seed + r, n_init=3,
+                                     batch_size=4096).fit_predict(_proj_km(df["LAT"], df["LON"]))
+        folds += list(GroupKFold(n_splits=args.folds).split(df, groups=grupos))
+    splits = {ESQUEMA_PRINCIPAL: folds}
     if args.cv_aleatoria:
         splits["aleatoria"] = list(KFold(args.folds, shuffle=True, random_state=args.seed).split(df))
     return splits
@@ -704,7 +850,7 @@ def validar(tarefa, df, y, w, specs, splits, args, classes):
         for f, (tr, te) in enumerate(folds, start=1):
             t0 = time.time()
             fb = ConstrutorFeatures(tarefa, k=args.k, cats=cats, classes=classes,
-                               geracao=args.com_geracao).fit(df.iloc[tr], y[tr], w[tr])
+                               grupos=args.grupos).fit(df.iloc[tr], y[tr], w[tr])
             Ftr, Fte = fb.transform(df.iloc[tr], treino=True), fb.transform(df.iloc[te])
             print(f"   [{esquema}] fold {f}/{len(folds)} — treino {len(tr):,} | teste {len(te):,} "
                   f"(features {time.time() - t0:.0f}s)".replace(",", "."))
@@ -718,7 +864,8 @@ def validar(tarefa, df, y, w, specs, splits, args, classes):
                     if tarefa == "regressao":
                         linha.update(metricas_regressao(y[te], p, w[te], df["GRU_TEN"].to_numpy()[te]))
                     else:
-                        linha.update(metricas_classificacao(y[te], p, w[te], df["MUN"].to_numpy()[te], n_cls))
+                        linha.update(metricas_classificacao(y[te], p, w[te], df["MUN"].to_numpy()[te], n_cls,
+                                                            classes=classes))
                 except Exception as exc:
                     linha["erro"] = f"{type(exc).__name__}: {exc}"[:300]
                     print(f"      ✗ {spec.nome}: {linha['erro']}")
@@ -742,25 +889,51 @@ def resumir(res: pd.DataFrame, metricas: list[str], principal: str, crescente: b
     return agg.reset_index().sort_values(["esquema", f"{principal}_media"], ascending=[True, crescente])
 
 
-def ablacao_geracao(res: pd.DataFrame, tarefa: str, metricas: dict[str, bool]) -> pd.DataFrame:
-    """Comparação pareada (mesmos folds) de cada modelo '+ geração' com o modelo base.
-    metricas: {nome: True se menor é melhor}. Delta = com geração − sem geração."""
+def teste_pareado(d: np.ndarray, k_folds: int) -> dict:
+    """Significância de deltas pareados por fold.
+    • t corrigido de Nadeau & Bengio (2003): folds de CV compartilham treino, então a variância
+      ingênua subestima a incerteza; o fator (1/n + n_teste/n_treino) corrige isso.
+    • Wilcoxon (postos sinalizados) como alternativa não paramétrica."""
+    from scipy import stats
+    d = np.asarray(d, float)
+    n = len(d)
+    saida = {"t_corrigido": np.nan, "p_t_corrigido": np.nan, "ic95_inf": np.nan, "ic95_sup": np.nan,
+             "p_wilcoxon": np.nan}
+    if n < 2 or np.allclose(d, d[0]):
+        return saida
+    var = (1 / n + 1 / (k_folds - 1)) * d.var(ddof=1)
+    t = d.mean() / np.sqrt(var)
+    tc = stats.t.ppf(0.975, n - 1)
+    saida.update(t_corrigido=t, p_t_corrigido=2 * stats.t.sf(abs(t), n - 1),
+                 ic95_inf=d.mean() - tc * np.sqrt(var), ic95_sup=d.mean() + tc * np.sqrt(var))
+    try:
+        saida["p_wilcoxon"] = stats.wilcoxon(d).pvalue
+    except ValueError:  # todos os deltas nulos
+        pass
+    return saida
+
+
+def ablacao(res: pd.DataFrame, tarefa: str, metricas: dict[str, bool], k_folds: int) -> pd.DataFrame:
+    """Comparação pareada (mesmos folds) de cada variante '<modelo> + <grupo>' com o modelo base.
+    metricas: {nome: True se menor é melhor}. Delta = com grupo − sem grupo."""
     ok = res[(res["erro"].isna()) & (res["esquema"] == ESQUEMA_PRINCIPAL)]
     linhas = []
     for nome in ok["modelo"].unique():
-        if not nome.endswith(SUFIXO_GER):
+        grupo = next((g for g, suf in SUFIXOS_GRUPO.items() if nome.endswith(suf)), None)
+        if grupo is None:
             continue
-        base = nome[: -len(SUFIXO_GER)]
-        par = ok[ok["modelo"] == nome].merge(ok[ok["modelo"] == base], on="fold", suffixes=("_ger", "_base"))
+        base = nome[: -len(SUFIXOS_GRUPO[grupo])]
+        par = ok[ok["modelo"] == nome].merge(ok[ok["modelo"] == base], on="fold", suffixes=("_com", "_base"))
         for m, menor_melhor in metricas.items():
-            if f"{m}_ger" not in par.columns:
+            if f"{m}_com" not in par.columns:
                 continue
-            d = par[f"{m}_ger"] - par[f"{m}_base"]
+            d = (par[f"{m}_com"] - par[f"{m}_base"]).dropna()
             linhas.append({
-                "tarefa": tarefa, "modelo_base": base, "metrica": m,
-                "base_media": par[f"{m}_base"].mean(), "com_geracao_media": par[f"{m}_ger"].mean(),
+                "tarefa": tarefa, "grupo": grupo, "modelo_base": base, "metrica": m,
+                "base_media": par[f"{m}_base"].mean(), "com_grupo_media": par[f"{m}_com"].mean(),
                 "delta_media": d.mean(), "delta_dp": d.std(),
-                "folds_melhor": int(((d < 0) if menor_melhor else (d > 0)).sum()), "n_folds": len(par),
+                "folds_melhor": int(((d < 0) if menor_melhor else (d > 0)).sum()), "n_folds": len(d),
+                **teste_pareado(d.to_numpy(), k_folds),
                 "deltas_por_fold": " | ".join(f"{v:+.4f}" for v in d),
             })
     return pd.DataFrame(linhas)
@@ -772,7 +945,7 @@ def ablacao_geracao(res: pd.DataFrame, tarefa: str, metricas: dict[str, bool]) -
 def ajustar_final(tarefa, spec, df, y, w, args, classes):
     cats = CATS_TAREFA1 if tarefa == "regressao" else []
     fb = ConstrutorFeatures(tarefa, k=args.k, cats=cats, classes=classes,
-                               geracao=args.com_geracao).fit(df, y, w)
+                               grupos=args.grupos).fit(df, y, w)
     est, cols = treinar(spec, fb, fb.transform(df, treino=True), y, w, args.seed)
     return fb, est, cols
 
@@ -780,6 +953,8 @@ def ajustar_final(tarefa, spec, df, y, w, args, classes):
 def salvar_importancia(est, cols, nome_arq):
     imp = getattr(est, "feature_importances_", None)
     if imp is None:
+        # Modelo sem importâncias (ex.: GP): remove o arquivo de uma rodada anterior, que ficaria desatualizado
+        (OUT_DIR / nome_arq).unlink(missing_ok=True)
         return
     (pd.DataFrame({"feature": cols, "importancia": np.asarray(imp, float)})
      .sort_values("importancia", ascending=False)
@@ -895,22 +1070,31 @@ def _md(df: pd.DataFrame, cols: list[str], n: int | None = None) -> str:
     return "\n".join(linhas)
 
 
-def relatorio(r1, r2, reg, metodo_exp, melhor1, melhor2, args, n_amostra, abl=None):
+def relatorio(r1, r2, reg, metodo_exp, melhor1, melhor2, args, n_amostra, abl=None, modelo_regional1=None,
+              modelo_regional2=None):
     p1 = r1[r1["esquema"] == ESQUEMA_PRINCIPAL] if not r1.empty else r1
     p2 = r2[r2["esquema"] == ESQUEMA_PRINCIPAL] if not r2.empty else r2
     elig = reg[reg["PCT_CONSUMO"].notna()]
     txt = [
         "# Comparação de algoritmos de ML — BDGD/ANEEL", "",
         f"- Amostra estratificada por GRU_TEN: **{n_amostra:,}** UCs (pesos restauram a população)".replace(",", "."),
-        f"- Validação: **Spatial Block CV** — {args.folds} folds, blocos = "
+        f"- Validação: **Spatial Block CV** — {args.folds} folds"
+        f"{f' × {args.repeticoes} repetições' if args.repeticoes > 1 else ''}, blocos = "
         f"{'municípios' if args.tipo_bloco == 'municipio' else f'{args.n_blocos} clusters K-means'}",
         f"- Índice de expansão: {metodo_exp}", "",
         "## Tarefa 1 — consumo anual de uma nova UC (log1p kWh)",
         _md(p1, ["modelo", "familia", "RMSE_log_media", "RMSE_log_dp", "R2_log_media", "MdAPE_pct_media"]) if not p1.empty else "_sem resultados_",
-        f"\n**Melhor modelo:** {melhor1}\n",
+        f"\n**Melhor modelo:** {melhor1}"
+        + (f" · previsões regionais (nova UC sem perfil nem conjunto/alimentador): **{modelo_regional1}**"
+           if modelo_regional1 and modelo_regional1 != melhor1 else "")
+        + (" · alvo anualizado (UCs ligadas no ano da data-base)" if args.alvo_anualizado else "") + "\n",
         "## Tarefa 2 — distribuição de GRU_TEN por região",
-        _md(p2, ["modelo", "familia", "LogLoss_media", "F1_macro_media", "TVD_regional_media"]) if not p2.empty else "_sem resultados_",
-        f"\n**Melhor modelo:** {melhor2}\n",
+        _md(p2, ["modelo", "familia", "LogLoss_media", "F1_macro_media", "TVD_regional_media"]
+            + [c for c in p2.columns if c.startswith(("AUC_PR_", "Prevalencia_")) and c.endswith("_media")])
+        if not p2.empty else "_sem resultados_",
+        f"\n**Melhor modelo:** {melhor2}"
+        + (f" · previsões regionais: **{modelo_regional2}**"
+           if modelo_regional2 and modelo_regional2 != melhor2 else "") + "\n",
         "## Top 15 municípios — maior consumo anual",
         _md(elig.sort_values("ENE_TOTAL_kWh", ascending=False),
             ["NOME_MUNICIPIO", "UF", "N_UC", "ENE_TOTAL_kWh", "QUADRANTE"], 15),
@@ -920,11 +1104,14 @@ def relatorio(r1, r2, reg, metodo_exp, melhor1, melhor2, args, n_amostra, abl=No
     ]
     if abl is not None and not abl.empty:
         txt += [
-            "", "## Ablação — variáveis de geração (usinas liberadas, ANEEL/SIGA)",
-            "Mesmos folds para o modelo com e sem as variáveis `GER_*`. "
-            "Delta = com geração − sem geração; `folds_melhor` conta os folds em que a geração ajudou.", "",
-            _md(abl, ["tarefa", "modelo_base", "metrica", "base_media", "com_geracao_media",
-                      "delta_media", "folds_melhor", "n_folds"]),
+            "", "## Ablação por grupo de variáveis",
+            "Mesmos folds para o modelo com e sem o grupo (`ger` = variáveis `GER_*` das usinas, ANEEL/SIGA). "
+            "Delta = com − sem; `folds_melhor` conta os folds em que o grupo ajudou. `p_t_corrigido`: t pareado "
+            "com a correção de Nadeau-Bengio para folds de CV (que compartilham treino); `p_wilcoxon`: postos "
+            "sinalizados (com 5 folds, o menor p bilateral possível é 0,0625 — use `--repeticoes`).", "",
+            _md(abl, ["tarefa", "grupo", "modelo_base", "metrica", "base_media", "com_grupo_media",
+                      "delta_media", "ic95_inf", "ic95_sup", "folds_melhor", "n_folds", "p_t_corrigido",
+                      "p_wilcoxon"]),
         ]
     (OUT_DIR / "relatorio.md").write_text("\n".join(txt), encoding="utf-8")
 
@@ -952,10 +1139,22 @@ def parse_args():
     ap.add_argument("--min-uc", type=int, default=30, help="mínimo de UCs p/ entrar nos rankings")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--rapido", action="store_true", help="modo de teste rápido")
-    ap.add_argument("--com-geracao", action="store_true",
-                    help="acrescenta variantes '+ geração' (variáveis GER_* das usinas) e a ablação")
+    ap.add_argument("--com-geracao", action="store_true", help="atalho para --grupos ger")
+    ap.add_argument("--grupos", default="",
+                    help=f"grupos de variáveis para ablação, separados por vírgula ({', '.join(SUFIXOS_GRUPO)})")
+    ap.add_argument("--alvo-anualizado", action="store_true",
+                    help="extrapola p/ 12 meses o consumo das UCs ligadas no ano da data-base")
+    ap.add_argument("--repeticoes", type=int, default=1,
+                    help="repete a CV espacial com blocos de sementes diferentes (mais folds p/ os testes)")
     ap.add_argument("--saida", type=Path, default=None, help="pasta de resultados (padrão: modelagem/resultados)")
     a = ap.parse_args()
+    a.grupos = {g.strip() for g in a.grupos.split(",") if g.strip()} | ({"ger"} if a.com_geracao else set())
+    desconhecidos = a.grupos - set(SUFIXOS_GRUPO)
+    if desconhecidos:
+        ap.error(f"grupos desconhecidos: {sorted(desconhecidos)} (disponíveis: {sorted(SUFIXOS_GRUPO)})")
+    if a.grupos == {GRUPO_TODOS}:  # "--grupos todos" sozinho = todos os grupos + a combinação
+        a.grupos = set(SUFIXOS_GRUPO)
+    a.com_geracao = "ger" in a.grupos
     if a.rapido:
         a.n_por_classe, a.folds, a.n_arvores = 15_000, 3, 150
         a.n_gwr, a.n_gp, a.n_blocos = 1200, 600, 30
@@ -968,6 +1167,9 @@ def main():
     if args.saida is not None:
         OUT_DIR = args.saida.resolve()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    if "ibge" in args.grupos and not features_ibge.disponivel():
+        raise FileNotFoundError(f"--grupos ibge requer {features_ibge.ARQUIVO_IBGE} "
+                                "(rode tratamento_base/pre_filtragem/baixar_ibge.py)")
     if args.com_geracao and not features_geracao.disponivel():
         raise FileNotFoundError(f"--com-geracao requer {features_geracao.ARQUIVO_UGS_GEO} "
                                 "(rode tratamento_base/merge_municipios/georreferenciar_usinas.py)")
@@ -986,6 +1188,12 @@ def main():
     df, pop = amostrar(lf_modelo, args.n_por_classe, args.seed)
     print(pop[["GRU_TEN", "N_POP", "FRAC"]].to_string(index=False))
 
+    if "rede" in args.grupos:
+        conj = agregados_rede(lf_base)
+        df = df.merge(conj, on=["DIST", "CONJ"], how="left")
+        print(f"Rede: {len(conj):,} conjuntos elétricos | amostra com conjunto: ".replace(",", ".")
+              + f"{100 * df['REDE_LOG_N_CONJ'].notna().mean():.0f}%")
+
     min_cls = max(2 * args.folds, 20)
     classes = sorted(g for g, n in df["GRU_TEN"].value_counts().items() if n >= min_cls)
     df = df[df["GRU_TEN"].isin(classes)].reset_index(drop=True)
@@ -994,7 +1202,9 @@ def main():
     print(f"Amostra: {len(df):,} UCs | classes GRU_TEN: {classes}".replace(",", "."))
 
     w = df["PESO"].to_numpy(float)
-    y1 = np.log1p(df["ENE"].to_numpy(float))
+    # Alvo: consumo anual; com --alvo-anualizado, UCs ligadas no ano da data-base têm o consumo
+    # parcial extrapolado para 12 meses (ENE_ANUAL, ver _lazy_fonte)
+    y1 = np.log1p(df["ENE_ANUAL" if args.alvo_anualizado else "ENE"].to_numpy(float))
     y2 = np.searchsorted(np.array(classes), df["GRU_TEN"].to_numpy())
     splits = criar_splits(df, args)
 
@@ -1011,7 +1221,8 @@ def main():
     print("\n[3/6] Tarefa 2 — distribuição de GRU_TEN (classificação)")
     specs2 = especificacoes("classificacao", args, n_cls=len(classes))
     res2, oof2 = validar("classificacao", df, y2, w, specs2, splits, args, classes)
-    r2 = resumir(res2, ["LogLoss", "F1_macro", "Acuracia_balanceada", "TVD_regional"], "LogLoss", True)
+    r2 = resumir(res2, ["LogLoss", "F1_macro", "Acuracia_balanceada", "TVD_regional"]
+                 + [f"{m}_{c}" for c in classes if c != "BT" for m in ("AUC_PR", "Prevalencia")], "LogLoss", True)
     res2.to_csv(OUT_DIR / "comparacao_tarefa2_grupos_tensao_por_fold.csv", index=False, sep=";", decimal=",")
     r2.to_csv(OUT_DIR / "comparacao_tarefa2_grupos_tensao.csv", index=False, sep=";", decimal=",")
 
@@ -1025,22 +1236,30 @@ def main():
         raise RuntimeError("Nenhum modelo concluiu a validação — veja os erros nos CSVs *_por_fold.")
 
     abl = None
-    if args.com_geracao:
+    if args.grupos:
         abl = pd.concat([
-            ablacao_geracao(res1, "1 · consumo", {"RMSE_log": True, "R2_log": False, "MdAPE_pct": True,
-                                                 **{f"R2_log_{g}": False for g in classes}}),
-            ablacao_geracao(res2, "2 · GRU_TEN", {"LogLoss": True, "TVD_regional": True, "F1_macro": False}),
+            ablacao(res1, "1 · consumo", {"RMSE_log": True, "R2_log": False, "MdAPE_pct": True,
+                                         **{f"R2_log_{g}": False for g in classes}}, args.folds),
+            ablacao(res2, "2 · GRU_TEN", {"LogLoss": True, "TVD_regional": True, "F1_macro": False, "AUC_PR_MT": False, "AUC_PR_AT": False}, args.folds),
         ], ignore_index=True)
-        abl.to_csv(OUT_DIR / "ablacao_geracao.csv", index=False, sep=";", decimal=",")
-        print("\n--- ABLAÇÃO: variáveis de geração (delta = com − sem) ---")
-        print(abl[["tarefa", "modelo_base", "metrica", "delta_media", "folds_melhor", "n_folds"]].to_string(index=False))
+        abl.to_csv(OUT_DIR / "ablacao.csv", index=False, sep=";", decimal=",")
+        print("\n--- ABLAÇÃO por grupo de variáveis (delta = com − sem; t corrigido de Nadeau-Bengio) ---")
+        print(abl[["tarefa", "grupo", "modelo_base", "metrica", "delta_media", "folds_melhor", "n_folds",
+                   "p_t_corrigido", "p_wilcoxon"]].to_string(index=False))
 
-    def melhor(r, specs):
-        nome = r[r["esquema"] == ESQUEMA_PRINCIPAL].iloc[0]["modelo"]
+    def melhor(r, specs, excluir=()):
+        nomes = r[r["esquema"] == ESQUEMA_PRINCIPAL]["modelo"]
+        nome = next(n for n in nomes if not any(n.endswith(SUFIXOS_GRUPO[g]) for g in excluir))
         return next(s for s in specs if s.nome == nome)
 
-    best1, best2 = melhor(r1, specs1), melhor(r2, specs2)
-    print(f"\nMelhor tarefa 1: {best1.nome}\nMelhor tarefa 2: {best2.nome}")
+    # As previsões regionais simulam uma nova UC num município, SEM perfil declarado nem conjunto/
+    # alimentador: usam o melhor modelo que não depende desses grupos (os demais entram só na comparação)
+    best1, best2 = melhor(r1, specs1, excluir=GRUPOS_FORA_REGIONAL), melhor(r2, specs2, excluir=GRUPOS_FORA_REGIONAL)
+    melhor_geral1, melhor_geral2 = melhor(r1, specs1).nome, melhor(r2, specs2).nome
+    print(f"\nMelhor tarefa 1: {melhor_geral1}\nMelhor tarefa 2: {melhor_geral2}")
+    for geral, regional in ((melhor_geral1, best1.nome), (melhor_geral2, best2.nome)):
+        if geral != regional:
+            print(f"   (previsões regionais usam {regional}: a nova UC não tem perfil nem conjunto/alimentador)")
 
     # ------------------------------------------------------- ajuste final
     print("\n[4/6] Ajustando melhores modelos na amostra completa...")
@@ -1111,7 +1330,7 @@ def main():
                 print(f"   [MGWR] falhou: {exc}")
 
     graficos(r1, r2, reg)
-    relatorio(r1, r2, reg, metodo_exp, best1.nome, best2.nome, args, len(df), abl)
+    relatorio(r1, r2, reg, metodo_exp, melhor_geral1, melhor_geral2, args, len(df), abl, best1.nome, best2.nome)
 
     print("\nTop 10 — maior consumo anual:")
     print(elig.sort_values("ENE_TOTAL_kWh", ascending=False)[["NOME_MUNICIPIO", "UF", "ENE_TOTAL_kWh", "QUADRANTE"]]

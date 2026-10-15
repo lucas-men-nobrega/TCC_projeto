@@ -25,6 +25,8 @@ ARQUIVO_MUN = BASE_DIR / "municipios.csv"
 ARQUIVO_COORD = BASE_DIR / "municipios_coordenadas.csv"
 SAIDA_USINAS = BASE_DIR / "filtrados" / "usinas_geo.parquet"
 SAIDA_UGS = BASE_DIR / "filtrados" / "unidades_geradoras_geo.parquet"
+SAIDA_OBRAS = BASE_DIR / "filtrados" / "siga_obras.parquet"
+FASES_OBRA = ["Construção", "Construção não iniciada"]
 
 BBOX_BRASIL = (-75.0, -35.0, -28.0, 6.5)  # lon_min, lat_min, lon_max, lat_max
 R_TERRA_KM = 6371.0
@@ -226,7 +228,28 @@ def main():
 
     print(f"\nArquivos gerados: {SAIDA_USINAS.name} ({usinas.height:,} usinas), "
           f"{SAIDA_UGS.name} ({ugs.height:,} UGs)".replace(",", "."))
+
+    obras = exportar_obras(mun, set(usinas["CodCEG"].to_list()))
+    print(f"{SAIDA_OBRAS.name}: {obras.height:,} usinas em obra sem UG liberada · "
+          f"{obras['MW_OUTORGADO'].sum():,.0f} MW · {obras['MUN'].n_unique():,} municípios".replace(",", "."))
+    print(obras.group_by("DscFaseUsina").agg(pl.len(), pl.col("MW_OUTORGADO").sum().round(0)))
     print("=" * 70)
+
+
+def exportar_obras(mun: pl.DataFrame, liberadas: set[str]) -> pl.DataFrame:
+    """Usinas do SIGA em construção (iniciada ou não) sem nenhuma UG liberada para operação comercial:
+    entrantes futuras, usadas para validar de forma externa a previsão da Tarefa 3."""
+    obras = (
+        pl.read_parquet(ARQUIVO_SIGA)
+        .filter(pl.col("DscFaseUsina").is_in(FASES_OBRA) & ~pl.col("CodCEG").is_in(list(liberadas)))
+        .unique(subset="CodCEG", keep="first")
+        .with_columns((pl.col("MdaPotenciaOutorgadaKw") / 1000).alias("MW_OUTORGADO"))
+    )
+    obras = municipio_principal(obras, mun)
+    obras = obras.select("CodCEG", "NomEmpreendimento", "SigTipoGeracao", "DscFaseUsina", "SigUFPrincipal",
+                         "MW_OUTORGADO", "DatEntradaOperacao", "MUN", "DscMunicipios")
+    obras.write_parquet(SAIDA_OBRAS, compression="zstd")
+    return obras
 
 
 if __name__ == "__main__":

@@ -50,6 +50,7 @@ TCC_projeto/
 │   │   └── *_municipios.parquet    #   + UF, ESTADO e NOME_MUNICIPIO (base final)
 │   ├── municipios.csv              # Tabela IBGE de municípios (não versionada)
 │   ├── municipios_coordenadas.csv  # Lat/lon da sede de cada município (não versionada)
+│   ├── ibge_municipios.csv         # Censo 2022/2010 e PIB dos Municípios (IBGE/SIDRA, não versionada)
 │   ├── unidades_geradoras_liberadas.csv  # UGs liberadas para operação (ANEEL, não versionada)
 │   ├── dd-liberacao-para-operacao-comercial-detalhado.pdf  # Dicionário da base de UGs
 │   ├── siga_empreendimentos_geracao.csv  # SIGA/ANEEL: coordenadas e municípios das usinas (não versionado)
@@ -64,7 +65,9 @@ TCC_projeto/
 │   ├── prever_nova_uc.py
 │   ├── analise_geracao_uf.py       # Geração (UGs liberadas) × consumo por UF
 │   ├── features_geracao.py         # Variáveis GER_* (potência no entorno) a partir das usinas georreferenciadas
+│   ├── features_ibge.py            # Variáveis IBGE_* (contexto socioeconômico do município)
 │   ├── modelo_expansao_geracao.py  # Tarefa 3: onde a geração se expande (por município)
+│   ├── modelo_composicao_tensao.py # Tarefa 2 por município: composição BT/MT/AT
 │   ├── validacao_expansao.py       # Selo de confiabilidade do índice de expansão
 │   ├── resultados/                 # CSVs, gráficos e relatório gerados (geracao/ para a geração)
 │   └── README.md                   # Documentação detalhada da modelagem
@@ -90,6 +93,7 @@ TCC_projeto/
 | **Municípios** | `base/municipios.csv` — código IBGE, UF, nome do estado e do município |
 | **Sedes municipais** | `base/municipios_coordenadas.csv` — latitude/longitude da sede de cada município ([kelvins/municipios-brasileiros](https://github.com/kelvins/municipios-brasileiros), derivada do IBGE). Usada para UCs e usinas sem coordenada |
 | **SIGA** | ANEEL — [Sistema de Informações de Geração](https://dadosabertos.aneel.gov.br/dataset/siga-sistema-de-informacoes-de-geracao-da-aneel), gerado em 01/10/2026: `base/siga_empreendimentos_geracao.csv`. Fornece coordenadas e municípios das usinas, cruzados pelo `CodCEG` |
+| **IBGE** | API SIDRA: Censo 2022 (tabela 4714: população, área, densidade), Censo 2010 (tabela 202: população total e urbana) e PIB dos Municípios (tabela 5938: PIB 2023 e valor adicionado por setor 2021). Gerado por `tratamento_base/pre_filtragem/baixar_ibge.py` em `base/ibge_municipios.csv` |
 | **Geração** | ANEEL — *Liberação para operação comercial – Detalhado* ([dados abertos](https://dadosabertos.aneel.gov.br)), gerado em 06/10/2026: `base/unidades_geradoras_liberadas.csv` |
 
 > O sufixo `_PJ` dos arquivos de origem sugere um recorte da BDGD (por exemplo, apenas pessoas jurídicas). Isso é compatível com a pequena participação da tarifa residencial (B1) na baixa tensão. Confirme a forma de extração antes de generalizar os números para todo o mercado.
@@ -259,7 +263,7 @@ flowchart LR
 ```
 
 1. **Pré-filtragem**: converte os CSVs da BDGD para Parquet com compressão zstd. O arquivo de BT é convertido para UTF-8 (`baixa_tensao_utf8.csv`) antes da leitura, e a leitura é em *streaming* para caber na memória.
-2. **Filtro de colunas**: mantém `MUN`, `GRU_TEN`, `GRU_TAR`, `SIT_ATIV`, `DAT_CON`, as colunas de energia e as coordenadas.
+2. **Filtro de colunas**: mantém `MUN`, `GRU_TEN`, `GRU_TAR`, `SIT_ATIV`, `DAT_CON`, as colunas de energia e as coordenadas. Mantém também o perfil declarado da UC (`CLAS_SUB`, `CNAE`, `FAS_CON`, `TEN_FORN`, `ARE_LOC`, `CAR_INST`, `DEM_CONT`, `LIV`, `CEG_GD`) e a distribuidora (`DIST`). `TIP_CC` e as demandas medidas ficam de fora por serem derivadas do consumo.
 3. **Junção com municípios**: *left join* por `MUN`, que preserva todas as UCs. Ficam sem município 61 UCs de MT e 896 de BT, cujo código `MUN` não consta na tabela do IBGE. Na mesma etapa, as UCs sem coordenada recebem a posição da sede do município. A coluna `COORD_ORIGEM` registra a origem: `UC` (medida), `SEDE_MUNICIPIO` (imputada) ou `SEM_COORDENADA`. A modelagem **não treina** com coordenadas imputadas, mas as usa para posicionar o município nas previsões regionais. No painel, essas UCs aparecem empilhadas na sede.
 
 **Unidades geradoras:** a pré-filtragem lê o CSV com vírgula decimal e mantém `CodCEG` e despachos como texto. A leitura **não** usa `ignore_errors`, para que um valor de potência mal formatado interrompa o script em vez de virar nulo. O filtro converte as datas e deriva `UF_COD`, `REGIAO`, `ANO_LIBER_COMER` e `POT_COMER_MW`.
@@ -296,6 +300,8 @@ python tratamento_base/filtro_colunas/filtro_unidades_geradoras.py
 # SIGA e georreferenciamento das usinas
 python tratamento_base/pre_filtragem/tratamento_siga.py
 python tratamento_base/merge_municipios/georreferenciar_usinas.py
+# Covariáveis municipais do IBGE (API SIDRA)
+python tratamento_base/pre_filtragem/baixar_ibge.py
 ```
 
 > Os scripts de tratamento usam caminhos absolutos (`C:\Users\LUCAS\...\TCC_projeto\base`). Em outra máquina, ajuste a constante `BASE_DIR` no topo de cada script.
@@ -305,9 +311,11 @@ python tratamento_base/merge_municipios/georreferenciar_usinas.py
 ```powershell
 python modelagem/comparar_modelos_ml.py --rapido   # teste (~10 min)
 python modelagem/comparar_modelos_ml.py            # execução completa
-python modelagem/comparar_modelos_ml.py --com-geracao               # + variantes com variáveis de geração e ablação
+python modelagem/comparar_modelos_ml.py --grupos todos --repeticoes 3 --alvo-anualizado  # ablação de todos os grupos + combinação, com testes pareados
+python modelagem/comparar_modelos_ml.py --alvo-anualizado            # anualiza o consumo das UCs ligadas em 2025
 python modelagem/comparar_modelos_ml.py --rapido --saida pasta_teste  # grava em outra pasta (preserva resultados/)
 python modelagem/modelo_expansao_geracao.py         # Tarefa 3 (~2 min)
+python modelagem/modelo_composicao_tensao.py        # Tarefa 2 por município (~11 min)
 python modelagem/validacao_expansao.py              # selo de confiabilidade (rodar após comparar_modelos_ml.py)
 ```
 
@@ -487,27 +495,74 @@ A tabela compara cada modelo com e sem as variáveis de geração, nos mesmos fo
 
 **2. Tarefa 3: onde a geração se expande** (`modelo_expansao_geracao.py`)
 
-A unidade é o município. O alvo é receber nova potência liberada nos 5 anos seguintes. As variáveis usam só dados até o ano de corte.
+A unidade é o município. O alvo é receber nova potência liberada nos 5 anos seguintes. As variáveis usam só dados até o ano de corte, inclusive o IBGE, que entra pelo **retrato de 2010** (Censo e PIB 2010); o Censo 2022 seria informação do futuro.
 
 | Validação | Melhor modelo | AUC-PR | AUC-ROC | Baseline kNN | Baseline persistência | Prevalência |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| Temporal (T=2015 → T=2020) | Random Forest | **0,319** | 0,821 | 0,179 | 0,151 | 5,4% |
-| Espacial (5 folds, T=2020) | Random Forest | **0,309** | 0,810 | 0,139 | 0,152 | 5,4% |
+| Temporal (T=2015 → T=2020) | Random Forest + IBGE 2010 | **0,337** | 0,832 | 0,179 | 0,151 | 5,4% |
+| Espacial (5 folds × 3 repetições, T=2020) | CatBoost + IBGE 2010 | **0,314** | 0,823 | 0,139 | 0,152 | 5,4% |
 
-- **Desempenho:** o modelo encontra municípios que recebem usina com precisão média seis vezes maior que o acaso e quase o dobro das linhas de base.
+**Validação externa com as obras do SIGA:** 2.234 usinas em construção sem UG liberada, 95,9 GW em 5,8% dos municípios. A previsão 2026–2030 foi feita sem esses dados.
+
+| Ordenação dos municípios | AUC-PR | AUC-ROC | Precisão nos 50 primeiros | % do MW em obra nos 100 primeiros |
+| :--- | ---: | ---: | ---: | ---: |
+| **Previsão 2026–2030** | **0,264** | **0,794** | **60%** | **29%** |
+| Persistência (recebeu em 2021–2025) | 0,122 | 0,616 | 34% | 16% |
+| Acaso | 0,058 | 0,500 | 6% | — |
+
+- **Desempenho:** o modelo encontra municípios que recebem usina com precisão seis vezes maior que o acaso e o dobro das linhas de base. Na validação externa, **30 dos 50 municípios de maior probabilidade já têm usina em obra**.
+- **IBGE 2010:** ganho pequeno. Melhora a log-loss na maioria dos folds (Wilcoxon p de 0,01 a 0,03), mas não passa no t corrigido.
+- **Cortes de treino empilhados** (2011, 2013, 2015): não superaram o corte único no RF; os cortes anteriores a 2014 têm dados incompletos.
+- **Calibração isotônica:** não alterou o Brier (0,0430 → 0,0432). As probabilidades do RF já estão calibradas.
 - **Potência recebida:** entre os municípios que recebem, a quantidade de MW tem R² log de 0,35.
-- **Variáveis mais importantes:** potência já instalada no município e no entorno, posição geográfica e dinâmica de conexões.
-- **Previsão para 2026–2030:** lidera o cinturão eólico e solar da BA (Igaporã, Morro do Chapéu, Juazeiro, Campo Formoso), seguido de PE e RN, com ~39 GW esperados.
+- **Variáveis mais importantes:** potência já instalada no município e no entorno, posição, PIB per capita e densidade de 2010, dinâmica de conexões.
+- **Previsão para 2026–2030:** lideram Igaporã e Caetité (BA), Pedra Grande e Bodó (RN) e Simões (PI), no cinturão eólico e solar do Nordeste, com ~41 GW esperados.
+
+**Tarefa 2 por município: composição dos grupos de tensão** (`modelo_composicao_tensao.py`)
+
+Por UC, nenhum modelo separa os grupos de tensão: a acurácia balanceada fica em 0,33 e o modelo sempre prevê BT. Por município, a composição é parcialmente previsível. Foram avaliados 5.280 municípios, com 5 folds espaciais × 3 repetições; 282 com cobertura insuficiente (GO e região metropolitana do RJ) ficaram de fora.
+
+| Modelo | TVD | Erro na fração de MT | R² da fração de MT |
+| :--- | ---: | ---: | ---: |
+| **Logística multinomial + IBGE + geração + rede** | **0,0126** | **1,25 p.p.** | **0,47** |
+| CatBoost + IBGE + geração + rede | 0,0130 | 1,28 p.p. | 0,39 |
+| Baseline kNN espacial | 0,0171 | 1,69 p.p. | −0,08 |
+| Baseline média nacional | 0,0190 | 1,88 p.p. | −0,02 |
+
+- **Resultado:** o melhor modelo é o mais simples e interpretável, uma regressão logística. Ele erra 34% menos que a média nacional e explica quase metade da variação da fração de MT entre municípios (média de 2,4%).
+- **Fatores:** o IBGE (peso da indústria e do agro, urbanização) é o grupo decisivo, com melhora em 15/15 folds e p < 0,001. A distribuidora também ajuda; a geração, não.
+- **Vizinhança espacial (kNN):** **piora** todos os modelos na validação por blocos. É um exemplo concreto de variável que parece útil numa validação aleatória e falha fora da região de treino.
+
+**Interpretabilidade: por que os modelos preveem o que preveem** (`explicar_modelos.py`)
+
+Importância por grupo de variáveis medida por permutação nos folds de teste: quanto o erro aumenta quando as colunas do grupo são embaralhadas.
+
+| Grupo | Tarefa 1 · RF (Δ RMSE log) | Tarefa 2 · CatBoost (Δ log-loss) | Tarefa 3 · RF (queda da AUC-PR) |
+| :--- | ---: | ---: | ---: |
+| Perfil declarado da UC | **1,28** | — | — |
+| Rede (distribuidora e conjunto) | 0,43 | **0,011** | — |
+| Grupo de tensão e tarifa | 0,30 | — | — |
+| Posição | 0,08 | 0,003 | 0,058 |
+| IBGE | 0,01 | 0,007 | 0,032 (IBGE 2010) |
+| Geração no entorno | 0,003 | 0,002 | **0,226** (geração já instalada) |
+| Conexões de consumo | — | — | 0,005 |
+
+- **Consumo (Tarefa 1):** o pedido de ligação manda. Demanda contratada (MT), carga instalada (BT), fases e tensão de fornecimento lideram também no SHAP. A dependência parcial mostra o consumo crescendo de forma quase exponencial com a demanda contratada, e com retorno decrescente na carga instalada da BT. Depois vem a área de concessão (distribuidora). A localização em si pesa pouco.
+- **Tensão por UC (Tarefa 2):** o que sobra de sinal é contexto local. Densidade da vizinhança (distância às UCs vizinhas), composição da vizinhança e da distribuidora, urbanização.
+- **Expansão da geração (Tarefa 3):** é **path-dependent**. Ter geração instalada responde pela maior parte do acerto (queda de 0,23 em AUC-PR de 0,34). Os municípios do topo estão acima do percentil 96 em MW já instalado, perto de usinas e, quase todos, abaixo do percentil 30 em PIB per capita. A dinâmica de conexões de consumo quase não pesa, o que reforça que a geração centralizada **não segue a demanda**.
+- **Composição por município (Tarefa 2):** coeficientes da logística: urbanização, PIB per capita e peso do agro aumentam a fração de MT; o peso da administração pública a reduz.
+- **O que sobra de erro (Tarefa 1):** os resíduos fora da amostra têm **I de Moran = 0,34 (p = 0,002)**, então ainda há estrutura regional não explicada. O modelo subestima o litoral do RJ, efeito da cobertura incompleta da BT, e superestima o interior do PR e de SC. O R² vai de 0,34 no Nordeste a 0,65 no Sudeste, e de 0,24 a 0,85 entre distribuidoras.
 
 **3. Selo de confiabilidade do índice de expansão** (`validacao_expansao.py`)
 
 > Números calculados sobre a saída da execução rápida, já com o ano de referência corrigido.
 
-- **Critério de suspeita:** a mediana nacional de UCs ativas com `DAT_CON` em 2023–2025 é 12,2%. Acima de 36,6% (3× a mediana), o município fica com suspeita de recadastramento.
-- **Municípios suspeitos:** 479, incluindo **100% dos municípios de AL, AP e PI** (≈ 98% das UCs com ligação "recente") e 58% dos do PA.
-- **Selos:** 4.914 Alta, 90 Média e 559 Baixa. Os **30 primeiros do índice de expansão estão todos sob suspeita** (24 Baixa, 6 Média).
-- **Quadrante "Fronteira de expansão":** dos 579 municípios, 353 ficam com selo Baixa e 70 com Média.
-- **Correlação de Spearman entre o índice e a geração recente:** −0,04 por município e 0,01 por UF. A expansão da geração centralizada não acompanha a das conexões. Por isso a geração só eleva um município suspeito a Média, nunca a Alta.
+- **Critério de suspeita:** a mediana nacional de UCs ativas com `DAT_CON` em 2023–2025 é 12,2%. Acima de 36,6% (3× a mediana), o município fica com suspeita de recadastramento. O mesmo limiar vale para a **distribuidora inteira**, que é a unidade real do recadastramento.
+- **Distribuidoras suspeitas:** 4, com 58% a 99% das UCs "ligadas" nos últimos 3 anos (PI, PA, AL e AP). Seus municípios herdam a suspeita, num total de **539 municípios suspeitos**.
+- **Cobertura insuficiente:** municípios com menos de 10 UCs ativas por mil habitantes (GO e RJ metropolitano) recebem selo Baixa.
+- **Selos:** 4.753 Alta, 197 Média e 613 Baixa. Os **30 primeiros do índice original estão todos sob suspeita** (18 Baixa, 12 Média).
+- **Evidências independentes:** geração nova a até 50 km e crescimento populacional 2010–2022 (Censo) acima do percentil 75. A geração não acompanha o índice (Spearman ≈ 0), então só eleva um suspeito a Média.
+- **Índice normalizado por distribuidora:** é o percentil do município entre os da mesma distribuidora. Ele se correlaciona **3,5 vezes mais** com o crescimento populacional do Censo do que o índice original (0,21 contra 0,06). O topo passa a mostrar expansão plausível: Lucas do Rio Verde (MT, população +61%), Maricá (RJ, +44%), Itaitinga (CE, +59%), em vez do PI.
 
 Arquivos: [`resultados/geracao/relatorio_tarefa3.md`](modelagem/resultados/geracao/relatorio_tarefa3.md) e `resultados/relatorio_validacao.md`. Este último é gerado por `validacao_expansao.py` após a rodada completa.
 
@@ -543,6 +598,7 @@ Arquivos: [`resultados/geracao/relatorio_tarefa3.md`](modelagem/resultados/gerac
 - Os arquivos `_PJ` parecem ser um recorte da BDGD; a confirmar antes de extrapolar para todo o mercado.
 - Os scripts de tratamento usam caminhos absolutos.
 - Os significados de alguns códigos de `GRU_TAR` (marcados com \*) precisam ser confirmados no Anexo II do DDA.
+- **Região metropolitana do RJ (`DIST 382`): o recorte quase não tem UCs de BT** (5,4 mil ativas, contra 6,9 mil de MT). Em 28 municípios do RJ há menos de 1 UC ativa por mil habitantes; a mediana nacional é 66. O Rio de Janeiro aparece como 2º maior consumo com só 4.198 UCs, quase todas de MT/AT, então a posição dele no ranking reflete o consumo de MT/AT, não o mercado total. O modelo da Tarefa 2 por município exclui do treino e da avaliação os municípios com menos de 10 UCs ativas por mil habitantes (281, quase todos de GO e RJ).
 - Goiás (`DIST 6072`): UCs posicionadas na sede do município (sem coordenada na origem) e 97% marcadas como desativadas. Os números do estado estão subestimados. Vale testar uma versão mais nova da BDGD dessa distribuidora.
 - A base de UGs liberadas cobre apenas usinas fiscalizadas na expansão da oferta (sem geração distribuída) e é incompleta antes de 2014. A localização vem do SIGA: 1,5% do MW (termelétricas antigas fora do SIGA) fica sem geografia.
 - As variáveis de geração da Tarefa 1 usam usinas liberadas até 2025, a mesma data-base do consumo. Elas descrevem o entorno, não causalidade.
