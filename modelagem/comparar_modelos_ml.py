@@ -492,8 +492,11 @@ def cols_espacial(g): return g["coords"] + g["rot"] + g["knn"] + g["te"] + g["ca
 # Grupos de variáveis avaliados por ablação (--grupos): nome do grupo → sufixo das variantes.
 # Cada grupo gera "<modelo> + <grupo>" dos MODELOS_ABLACAO, com as mesmas colunas + as do grupo.
 SUFIXOS_GRUPO = {"ger": " + geração", "perfil": " + perfil", "ibge": " + IBGE", "rede": " + rede",
-                 "todos": " + todos"}
+                 "todos": " + todos", "ger_ibge": " + geração/IBGE"}
 GRUPO_TODOS = "todos"  # variante combinada: união dos demais grupos ativos
+# Variantes combinadas fixas: grupo → grupos que une. "ger_ibge" só usa dados disponíveis para uma
+# nova UC num município, logo concorre às previsões regionais (ao contrário de "todos")
+GRUPOS_COMBINADOS = {"ger_ibge": ("ger", "ibge")}
 GRUPOS_SO_REGRESSAO = {"perfil"}
 # Grupos que dependem de dados da UC indisponíveis no cenário "nova UC num município" (perfil
 # declarado, conjunto/alimentador): os modelos com eles não são usados nas previsões regionais
@@ -710,7 +713,7 @@ def especificacoes(tarefa: str, args, n_cls: int = 0) -> list[Espec]:
 
     # Variantes da ablação: mesmo modelo (mesma fábrica e parâmetros) + as colunas do grupo
     grupos = getattr(args, "grupos", set())
-    individuais = sorted(g for g in grupos if g != GRUPO_TODOS)
+    individuais = sorted(g for g in grupos if g != GRUPO_TODOS and g not in GRUPOS_COMBINADOS)
     bases = [e for e in E if e.nome in MODELOS_ABLACAO]
     for grupo in individuais:
         if grupo in GRUPOS_SO_REGRESSAO and not reg:
@@ -724,6 +727,15 @@ def especificacoes(tarefa: str, args, n_cls: int = 0) -> list[Espec]:
         for base in bases:
             E.append(replace(base, nome=base.nome + SUFIXOS_GRUPO[GRUPO_TODOS],
                              colunas=lambda g, c=base.colunas: c(g) + [x for gr in individuais for x in g[gr]]))
+    for combo, partes in GRUPOS_COMBINADOS.items():
+        if combo in grupos:
+            for base in bases:
+                E.append(replace(base, nome=base.nome + SUFIXOS_GRUPO[combo],
+                                 colunas=lambda g, c=base.colunas, ps=partes: c(g) + [x for p in ps for x in g[p]]))
+    # --modelos: mantém só as especificações cujo nome contém algum dos trechos pedidos
+    filtro = getattr(args, "modelos", None)
+    if filtro:
+        E = [e for e in E if any(t in e.nome for t in filtro)]
     return E
 
 
@@ -1200,13 +1212,20 @@ def parse_args():
     ap.add_argument("--repeticoes", type=int, default=1,
                     help="repete a CV espacial com blocos de sementes diferentes (mais folds p/ os testes)")
     ap.add_argument("--saida", type=Path, default=None, help="pasta de resultados (padrão: modelagem/resultados)")
+    ap.add_argument("--modelos", default="",
+                    help="roda só os modelos cujo nome contém algum destes trechos, separados por vírgula "
+                         "(ex.: 'Random Forest padrão,CatBoost')")
     a = ap.parse_args()
+    a.modelos = [t.strip() for t in a.modelos.split(",") if t.strip()]
     a.grupos = {g.strip() for g in a.grupos.split(",") if g.strip()} | ({"ger"} if a.com_geracao else set())
     desconhecidos = a.grupos - set(SUFIXOS_GRUPO)
     if desconhecidos:
         ap.error(f"grupos desconhecidos: {sorted(desconhecidos)} (disponíveis: {sorted(SUFIXOS_GRUPO)})")
     if a.grupos == {GRUPO_TODOS}:  # "--grupos todos" sozinho = todos os grupos + a combinação
         a.grupos = set(SUFIXOS_GRUPO)
+    for combo, partes in GRUPOS_COMBINADOS.items():  # a combinação precisa das features de cada parte
+        if combo in a.grupos:
+            a.grupos |= set(partes)
     a.com_geracao = "ger" in a.grupos
     if a.rapido:
         a.n_por_classe, a.folds, a.n_arvores = 15_000, 3, 150
