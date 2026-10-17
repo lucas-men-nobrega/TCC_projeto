@@ -20,6 +20,8 @@ Fluxo:
    • enquadramento (bounds) pré-calculado por UF e por município.
 5. Serve a API JSON (/api/...), com cache de respostas e gzip, e o front-end (dashboard/static).
 6. Serve também o painel de geração (/geracao.html, API /api/ger/...), definido em geracao.py.
+7. Carrega em segundo plano o modelo final da Tarefa 1 e serve a previsão de consumo de uma
+   nova UC (/api/prev/...), usada na aba de comparação; definido em previsao.py.
 """
 from __future__ import annotations
 
@@ -38,6 +40,7 @@ from urllib.parse import parse_qs, urlparse
 import polars as pl
 
 import geracao  # painel de unidades geradoras (/geracao.html)
+import previsao  # previsão de consumo de uma nova UC (modelo final da Tarefa 1)
 
 # --------------------------------------------------------------------------- #
 # Configuração
@@ -469,6 +472,39 @@ def api_resumo(params: dict) -> dict:
     }
 
 
+def api_comparar(params: dict) -> dict:
+    """Comparação lado a lado dos municípios selecionados (ou, sem municípios, dos estados),
+    respeitando os demais filtros: totais e composição por grupo de tensão e tarifário."""
+    col = "MUN" if _lista(params, "mun") else "UF"
+    df = _filtrar(CUBO, params).filter(pl.col(col) != CODIGOS[col].get(NA, -1))
+    estados = {d["uf"]: d for d in META["ufs"]}
+
+    def composicao(dim: str) -> dict[int, dict[str, float]]:
+        out: dict[int, dict[str, float]] = {}
+        for k, d, e in df.group_by([col, dim]).agg(pl.col("ENE").sum()).iter_rows():
+            if e:
+                out.setdefault(k, {})[ROTULOS[dim][d]] = e
+        return out
+
+    por_ten, por_tar = composicao("GRU_TEN"), composicao("GRU_TAR")
+    totais = (
+        df.group_by(col)
+        .agg(pl.col("ENE").sum(), pl.col("N").sum(), pl.col("MUN").n_unique().alias("MUNS"))
+        .sort("ENE", descending=True)
+    )
+    itens = []
+    for k, e, n, muns in totais.iter_rows():
+        if col == "MUN":
+            cod, nome, uf = INFO_MUN.get(k, (ROTULOS["MUN"][k], NA, NA))
+            sigla = SIGLAS_UF.get(uf, uf)
+        else:
+            cod = ROTULOS["UF"][k]
+            nome, sigla = estados.get(cod, {}).get("estado", cod), SIGLAS_UF.get(cod, cod)
+        itens.append({"chave": cod, "nome": nome, "sigla": sigla, "ene": e, "n": n,
+                      "municipios": muns, "por_gru_ten": por_ten.get(k, {}), "por_gru_tar": por_tar.get(k, {})})
+    return {"nivel": "mun" if col == "MUN" else "uf", "itens": itens}
+
+
 # --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
@@ -476,6 +512,7 @@ ROTAS = {
     "/api/meta": lambda p: META,
     "/api/pontos": api_pontos,
     "/api/resumo": api_resumo,
+    "/api/comparar": api_comparar,
     **geracao.ROTAS,
 }
 
@@ -504,8 +541,23 @@ class Handler(SimpleHTTPRequestHandler):
         if "/api/" in primeiro:
             sys.stderr.write(f"[http] {primeiro}\n")
 
+    def end_headers(self):
+        # Front-end sempre revalidado: evita que o navegador use JS/CSS antigos após edições
+        if urlparse(self.path).path not in ROTAS and urlparse(self.path).path not in previsao.ROTAS:
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
     def do_GET(self):
         url = urlparse(self.path)
+        if url.path in previsao.ROTAS:
+            status, corpo = previsao.responder(url.path, {k: v[0] for k, v in parse_qs(url.query).items()})
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(corpo)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(corpo)
+            return
         if url.path not in ROTAS:
             return super().do_GET()
         consulta = tuple(sorted((k, v[0]) for k, v in parse_qs(url.query).items()))
@@ -535,8 +587,12 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=8050)
     ap.add_argument("--rebuild", action="store_true", help="reconstrói o cache agregado")
     ap.add_argument("--no-browser", action="store_true", help="não abre o navegador")
+    ap.add_argument("--sem-previsao", action="store_true",
+                    help="não carrega o modelo de previsão de nova UC (economiza memória e ~40s de CPU)")
     args = ap.parse_args()
 
+    if not args.sem_previsao:
+        previsao.iniciar_carga()  # em segundo plano: o painel abre antes do modelo ficar pronto
     construir_cache(forcar=args.rebuild)
     carregar_dados()
     geracao.carregar()

@@ -46,20 +46,35 @@
       </section>
 
       <section class="filter">
-        <label class="filter-label" for="sel-uf">Estado</label>
-        <div class="select-wrap">
-          <select id="sel-uf"><option value="">Todos os estados</option></select>
+        <div class="filter-row">
+          <label class="filter-label" for="sel-uf">Estados</label>
+          <button class="link" type="button" id="btn-clear-uf" hidden>limpar</button>
         </div>
+        <div class="select-wrap">
+          <select id="sel-uf"><option value="">Adicionar estado…</option></select>
+        </div>
+        <div class="tags" id="tags-uf"></div>
       </section>
 
       <section class="filter">
-        <label class="filter-label" for="inp-mun">Município</label>
+        <div class="filter-row">
+          <label class="filter-label" for="inp-mun">Municípios</label>
+          <button class="link" type="button" id="btn-clear-mun" hidden>limpar</button>
+        </div>
         <div class="search-wrap">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-          <input id="inp-mun" list="lista-mun" placeholder="Digite para buscar…" autocomplete="off" />
-          <button type="button" class="clear" id="btn-clear-mun" title="Limpar município">×</button>
+          <input id="inp-mun" list="lista-mun" placeholder="Adicionar município…" autocomplete="off" />
           <datalist id="lista-mun"></datalist>
         </div>
+        <div class="tags" id="tags-mun"></div>
+      </section>
+
+      <section class="filter compare-box">
+        <button class="btn-compare" type="button" id="btn-comparar" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h13l-3-3M20 17H7l3 3"/></svg>
+          <span id="btn-comparar-txt">Comparar</span>
+        </button>
+        <p class="compare-hint" id="compare-hint">Selecione 2 ou mais estados (ou municípios) para comparar.</p>
       </section>
 
       <section class="filter">
@@ -126,6 +141,7 @@
           <article class="chart-card glass">
             <h3>Energia por grupo de tensão</h3>
             <div class="chart-box donut"><canvas id="chart-ten"></canvas></div>
+            <ul class="donut-legend" id="legend-ten"></ul>
           </article>
           <article class="chart-card glass">
             <h3>Top 10 municípios</h3>
@@ -137,6 +153,109 @@
   </div>
 
   <div class="toast" id="toast" role="alert"></div>
+
+  <!-- ============ COMPARAÇÃO ============ -->
+  <div class="modal" id="modal-comp" hidden>
+    <div class="modal-card glass" role="dialog" aria-modal="true" aria-labelledby="comp-titulo">
+      <header class="modal-head">
+        <div>
+          <h2 id="comp-titulo">Comparação</h2>
+          <p class="modal-sub" id="comp-sub"></p>
+        </div>
+        <button class="btn-ghost" type="button" id="btn-fechar-comp">Fechar</button>
+      </header>
+      <div class="modal-body">
+        <div class="table-wrap">
+          <table class="comp-table">
+            <thead>
+              <tr>
+                <th class="l">Local</th><th>Energia anual</th><th>% da seleção</th>
+                <th>UCs</th><th>Média por UC</th><th id="comp-th-mun">Municípios</th>
+              </tr>
+            </thead>
+            <tbody id="comp-tbody"></tbody>
+          </table>
+        </div>
+        <div class="comp-graficos" id="comp-graficos">
+        <div class="comp-toolbar">
+          <span>Composição do consumo</span>
+          <div class="seg" id="comp-modo">
+            <button type="button" data-modo="pct" class="active">%</button>
+            <button type="button" data-modo="abs">Absoluto</button>
+          </div>
+        </div>
+        <div class="comp-charts">
+          <article class="chart-card glass">
+            <h3>Por grupo de tensão</h3>
+            <div class="chart-box" id="comp-box-ten"><canvas id="comp-ten"></canvas></div>
+          </article>
+          <article class="chart-card glass">
+            <h3>Por grupo tarifário</h3>
+            <div class="chart-box" id="comp-box-tar"><canvas id="comp-tar"></canvas></div>
+          </article>
+        </div>
+        </div>
+
+        <section class="prev" id="prev">
+          <div class="comp-toolbar">
+            <span>Previsão de consumo para uma nova UC</span>
+            <span class="prev-badge" id="prev-badge">modelo final</span>
+          </div>
+          <p class="prev-intro">
+            Simula o <strong>mesmo pedido de ligação</strong> em cada local comparado, com o modelo final da
+            Tarefa 1. Campos em branco assumem o valor típico do grupo de tensão.
+          </p>
+
+          <form class="prev-form" id="prev-form" autocomplete="off">
+            <div class="pf pf-wide">
+              <label>Grupo de tensão</label>
+              <div class="seg" id="pf-gru_ten">
+                <button type="button" data-v="BT" class="active">BT</button>
+                <button type="button" data-v="MT">MT</button>
+                <button type="button" data-v="AT">AT</button>
+              </div>
+            </div>
+            <div class="pf"><label for="pf-gru_tar">Grupo tarifário</label><div class="select-wrap"><select id="pf-gru_tar" name="gru_tar"></select></div></div>
+            <div class="pf"><label for="pf-clas_sub">Classe / subclasse</label><div class="select-wrap"><select id="pf-clas_sub" name="clas_sub"></select></div></div>
+            <div class="pf"><label for="pf-cnae2">Atividade (divisão CNAE)</label><div class="select-wrap"><select id="pf-cnae2" name="cnae2"></select></div></div>
+            <div class="pf"><label for="pf-fas_con">Fases da ligação</label><div class="select-wrap"><select id="pf-fas_con" name="fas_con"></select></div></div>
+            <div class="pf"><label for="pf-are_loc">Área</label><div class="select-wrap"><select id="pf-are_loc" name="are_loc"></select></div></div>
+            <div class="pf"><label for="pf-ten_forn">Tensão de fornecimento <small>(cód. BDGD)</small></label><div class="select-wrap"><select id="pf-ten_forn" name="ten_forn"></select></div></div>
+            <div class="pf"><label for="pf-car_inst">Carga instalada (kW)</label><input id="pf-car_inst" name="car_inst" type="number" min="0" step="any" inputmode="decimal" /></div>
+            <div class="pf" id="pf-box-dem"><label for="pf-dem_cont">Demanda contratada (kW)</label><input id="pf-dem_cont" name="dem_cont" type="number" min="0" step="any" inputmode="decimal" /></div>
+            <div class="pf pf-checks">
+              <label class="check"><input type="checkbox" id="pf-livre" name="livre" /> Consumidor livre</label>
+              <label class="check"><input type="checkbox" id="pf-gd" name="gd" /> Geração distribuída na UC</label>
+              <button class="link" type="button" id="pf-reset">restaurar padrões</button>
+            </div>
+          </form>
+
+          <div class="prev-status" id="prev-status"></div>
+
+          <div class="prev-result" id="prev-result" hidden>
+            <div class="table-wrap">
+              <table class="comp-table">
+                <thead>
+                  <tr>
+                    <th class="l">Local</th><th>Consumo previsto</th><th>Por mês</th><th>Faixa provável (80%)</th>
+                    <th title="Nova UC do mesmo grupo de tensão, sem perfil declarado (modelo regional)">Nova UC genérica</th>
+                    <th title="Consumo anual médio das UCs ativas na base, de todos os grupos de tensão">Média atual (todas as UCs)</th>
+                  </tr>
+                </thead>
+                <tbody id="prev-tbody"></tbody>
+              </table>
+            </div>
+            <article class="chart-card glass">
+              <h3>Consumo anual previsto e faixa provável <small>(escala logarítmica)</small></h3>
+              <div class="chart-box"><canvas id="prev-chart"></canvas></div>
+            </article>
+            <p class="prev-nota" id="prev-perfil"></p>
+            <p class="prev-nota" id="prev-nota"></p>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>

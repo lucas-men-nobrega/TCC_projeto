@@ -49,10 +49,35 @@
       </section>
 
       <section class="filter">
-        <label class="filter-label" for="sel-uf">Estado</label>
-        <div class="select-wrap">
-          <select id="sel-uf"><option value="">Todos os estados</option></select>
+        <div class="filter-row">
+          <label class="filter-label" for="sel-uf">Estados</label>
+          <button class="link" type="button" id="btn-clear-uf" hidden>limpar</button>
         </div>
+        <div class="select-wrap">
+          <select id="sel-uf"><option value="">Adicionar estado…</option></select>
+        </div>
+        <div class="tags" id="tags-uf"></div>
+      </section>
+
+      <section class="filter">
+        <div class="filter-row">
+          <label class="filter-label" for="inp-mun">Municípios</label>
+          <button class="link" type="button" id="btn-clear-mun" hidden>limpar</button>
+        </div>
+        <div class="search-wrap">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="inp-mun" list="lista-mun" placeholder="Adicionar município…" autocomplete="off" />
+          <datalist id="lista-mun"></datalist>
+        </div>
+        <div class="tags" id="tags-mun"></div>
+      </section>
+
+      <section class="filter compare-box">
+        <button class="btn-compare" type="button" id="btn-comparar" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h13l-3-3M20 17H7l3 3"/></svg>
+          <span id="btn-comparar-txt">Comparar</span>
+        </button>
+        <p class="compare-hint" id="compare-hint">Selecione 2 ou mais estados (ou municípios) para comparar.</p>
       </section>
 
       <section class="filter">
@@ -81,7 +106,7 @@
         <h3>Legenda</h3>
         <div class="legend-bubbles" id="legend-bubbles"></div>
         <div class="legend-tipos" id="legend-tipos"></div>
-        <p class="legend-note">Uma bolha por estado, no centro das sedes municipais (a base só informa a UF da usina). Área ∝ potência liberada; cor = tipo predominante. Antes de 2014 a base não cobre toda a potência liberada por ano.</p>
+        <p class="legend-note">Uma bolha por estado, no centro das sedes municipais; com municípios selecionados, uma bolha por município, na posição das usinas. Área ∝ potência liberada; cor = tipo predominante. Antes de 2014 a base não cobre toda a potência liberada por ano.</p>
       </section>
     </aside>
 
@@ -120,10 +145,11 @@
           <article class="chart-card glass">
             <h3>Potência por tipo de geração</h3>
             <div class="chart-box donut"><canvas id="chart-tipo"></canvas></div>
+            <ul class="donut-legend" id="legend-tipo"></ul>
           </article>
           <article class="chart-card glass">
             <h3>Potência liberada por ano</h3>
-            <div class="chart-box"><canvas id="chart-ano"></canvas></div>
+            <div class="chart-box tall"><canvas id="chart-ano"></canvas></div>
           </article>
           <article class="chart-card glass">
             <h3>Top 10 usinas</h3>
@@ -135,6 +161,76 @@
   </div>
 
   <div class="toast" id="toast" role="alert"></div>
+
+  <!-- ============ COMPARAÇÃO ============ -->
+  <div class="modal" id="modal-comp" hidden>
+    <div class="modal-card glass" role="dialog" aria-modal="true" aria-labelledby="comp-titulo">
+      <header class="modal-head">
+        <div>
+          <h2 id="comp-titulo">Comparação</h2>
+          <p class="modal-sub" id="comp-sub"></p>
+        </div>
+        <button class="btn-ghost" type="button" id="btn-fechar-comp">Fechar</button>
+      </header>
+      <div class="modal-body">
+        <div class="table-wrap">
+          <table class="comp-table">
+            <thead>
+              <tr>
+                <th class="l">Local</th><th>Potência liberada</th><th>% da seleção</th>
+                <th>Usinas</th><th>UGs</th><th>Solar + eólica</th><th id="comp-th-mun">Municípios com usina</th>
+              </tr>
+            </thead>
+            <tbody id="comp-tbody"></tbody>
+          </table>
+        </div>
+        <div class="comp-graficos" id="comp-graficos">
+          <div class="comp-toolbar">
+            <span>Composição da potência</span>
+            <div class="seg" id="comp-modo">
+              <button type="button" data-modo="pct" class="active">%</button>
+              <button type="button" data-modo="abs">Absoluto</button>
+            </div>
+          </div>
+          <div class="comp-charts">
+            <article class="chart-card glass">
+              <h3>Por tipo de geração</h3>
+              <div class="chart-box"><canvas id="comp-tipo"></canvas></div>
+            </article>
+            <article class="chart-card glass">
+              <h3>Por período de liberação</h3>
+              <div class="chart-box"><canvas id="comp-periodo"></canvas></div>
+            </article>
+          </div>
+        </div>
+
+        <section class="prev" id="prev">
+          <div class="comp-toolbar">
+            <span>Expansão prevista da geração · 2026–2030</span>
+            <span class="prev-badge" id="prev-badge">modelo final · Tarefa 3</span>
+          </div>
+          <p class="prev-intro">
+            Probabilidade de cada local <strong>receber nova potência liberada para operação comercial</strong> nos
+            próximos 5 anos e os MW esperados, pelo modelo final da Tarefa 3 (treinado só com dados até o ano de corte).
+          </p>
+          <div class="prev-status" id="prev-status"></div>
+          <div class="prev-result" id="prev-result" hidden>
+            <div class="table-wrap">
+              <table class="comp-table">
+                <thead><tr id="prev-head"></tr></thead>
+                <tbody id="prev-tbody"></tbody>
+              </table>
+            </div>
+            <article class="chart-card glass">
+              <h3>MW esperados em 2026–2030 e usinas em obra</h3>
+              <div class="chart-box"><canvas id="prev-chart"></canvas></div>
+            </article>
+            <p class="prev-nota" id="prev-nota"></p>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>

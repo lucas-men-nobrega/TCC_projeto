@@ -345,19 +345,25 @@ python modelagem/analise_geracao_uf.py --ano-inicio 2020
 python dashboard/server.py              # abre http://localhost:8050
 python dashboard/server.py --rebuild    # força a reconstrução do cache
 python dashboard/server.py --port 9000  # porta alternativa
+python dashboard/server.py --sem-previsao  # não carrega o modelo de previsão de nova UC
 ```
 
 Na primeira execução, o painel gera o cache em `dashboard/cache/` (≈ 20 s). Nas seguintes, abre em menos de 1 s. O cache é refeito sozinho quando as bases ou a regra de agregação (`VERSAO_CACHE`) mudam.
 
 O painel mostra **só UCs ativas** (`SIT_ATIV = AT`): 9.541.912 UCs e 259,1 TWh. As desativadas são descartadas na montagem do cache, com a mesma regra da modelagem.
 
-**Painel de geração** (`http://localhost:8050/geracao.html`, ou botão *Geração* no topo): mostra a potência das unidades geradoras liberadas para operação comercial. Os filtros são tipo de geração, estado, ano de liberação (com atalho "desde 2014"), sistema (SIN ou isolado) e comercialização (ACR ou fora do ACR). A página traz:
-- **Indicadores:** potência, usinas, UGs e participação de solar + eólica.
-- **Mapa:** uma bolha por estado. A área é proporcional à potência e a cor indica o tipo predominante. Como a base só informa a UF, cada bolha fica no centro geográfico das sedes municipais do estado.
-- **Gráficos:** potência por tipo e por ano.
-- **Ranking:** as 10 maiores usinas.
+**Seleção múltipla e comparação** (painel de consumo): estados e municípios são escolhidos como etiquetas, e o painel mostra a soma da seleção. Com 2 ou mais locais, o botão *Comparar* abre uma janela com:
+- **Tabela e composição:** energia, UCs, média por UC e composição por grupo de tensão e por grupo tarifário de cada local.
+- **Previsão para uma nova UC:** simula o mesmo pedido de ligação em cada local com o modelo final da Tarefa 1 (`modelagem/resultados/modelos/modelo_ligacao_tarefa1.joblib`), com a mesma montagem do `prever_nova_uc.py --ligacao`. Mostra o consumo previsto, a faixa de 80% (resíduos fora da amostra) e, como referências, a nova UC genérica do modelo regional e a média atual. Nos estados, a previsão é feita em cada município e resumida pela média ponderada pelas UCs. O modelo é carregado em segundo plano ao iniciar o servidor (≈ 40 s); até lá a janela mostra o aviso de carregamento. O código está em `dashboard/previsao.py`.
 
-O painel é servido pelo mesmo `server.py`, sem cache, porque a base tem só 60 mil linhas. Ele exige o ETL de unidades geradoras e o arquivo `base/municipios_coordenadas.csv`.
+**Painel de geração** (`http://localhost:8050/geracao.html`, ou botão *Geração* no topo): mostra a potência das unidades geradoras liberadas para operação comercial. Os filtros são tipo de geração, estados e municípios (seleção múltipla), ano de liberação (com atalho "desde 2014"), sistema (SIN ou isolado) e comercialização (ACR ou fora do ACR). A página traz:
+- **Indicadores:** potência, usinas, UGs e participação de solar + eólica.
+- **Mapa:** uma bolha por estado, no centro geográfico das sedes municipais. A área é proporcional à potência e a cor indica o tipo predominante. Com municípios selecionados, cada município vira uma bolha na posição média das suas usinas.
+- **Gráficos:** potência por tipo e por ano.
+- **Ranking:** as 10 maiores usinas. O clique adiciona (ou remove) o município da usina na seleção.
+- **Comparação** (2 ou mais estados ou municípios): potência, usinas, UGs e % de solar + eólica de cada local, com a composição por tipo e por período de liberação. Traz também a **expansão prevista para 2026–2030** pelo modelo final da Tarefa 3 (`modelagem/resultados/geracao/previsao_expansao_geracao_municipios.csv`): probabilidade de receber nova geração, percentil nacional, MW esperados e, como referência externa, os MW em obra no SIGA. Nos estados, mostra a probabilidade média, o número esperado de municípios que recebem (soma das probabilidades) e os municípios de maior chance.
+
+O painel é servido pelo mesmo `server.py`, sem cache, porque a base tem só 60 mil linhas. Ele exige o ETL de unidades geradoras e o arquivo `base/municipios_coordenadas.csv`. O filtro por município usa `base/filtrados/unidades_geradoras_geo.parquet` (217 das 59.581 UGs ficam sem município).
 
 ---
 
