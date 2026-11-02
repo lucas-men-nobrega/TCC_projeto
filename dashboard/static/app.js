@@ -16,7 +16,7 @@
   };
 
   const $ = (id) => document.getElementById(id);
-  const HEAT = ["#22d3ee", "#6366f1", "#a855f7", "#ec4899", "#f59e0b"];
+  const HEAT = ["#f2cc8f", "#e9a86b", "#d9774b", "#b4492f", "#7a2a1e"];
   const R_MIN = 2.5, R_MAX = 34;
 
   // -------------------------------------------------------------- formatação
@@ -127,7 +127,7 @@
       attribution: "Imagens &copy; Esri, Maxar, Earthstar · Dados: BDGD/ANEEL", maxZoom: 19, maxNativeZoom: 18,
     }),
   };
-  basemaps["Escuro (Esri)"].addTo(map);
+  basemaps["Ruas (OpenStreetMap)"].addTo(map);
   L.control.layers(basemaps, null, { position: "topright", collapsed: true }).addTo(map);
 
   /* Camada de bolhas desenhada num único <canvas>: milhares de círculos por quadro,
@@ -272,33 +272,34 @@
   map.on("moveend", debounce(carregarPontos, 250));
 
   // ------------------------------------------------------------------ GRÁFICOS
-  Chart.defaults.color = "#94a3b8";
+  Chart.defaults.color = "#938a7b";
   Chart.defaults.font.family = "Inter, system-ui, sans-serif";
   Chart.defaults.font.size = 11;
-  Chart.defaults.borderColor = "rgba(148,163,184,0.08)";
+  Chart.defaults.borderColor = "rgba(90,70,40,0.08)";
 
   const tooltipCfg = {
-    backgroundColor: "rgba(15,18,32,0.95)", borderColor: "rgba(148,163,184,0.25)", borderWidth: 1,
-    padding: 10, cornerRadius: 10, titleFont: { family: "Outfit", size: 13, weight: "600" },
+    backgroundColor: "#fffdf8", borderColor: "#ddd2bd", borderWidth: 1,
+    titleColor: "#2f2a23", bodyColor: "#5f574b", footerColor: "#2f2a23",
+    padding: 10, cornerRadius: 10, titleFont: { family: "Inter", size: 12.5, weight: "600" },
     callbacks: { label: (c) => ` ${fmtEnergia(c.raw)}` },
   };
 
   function gradiente(ctx, area) {
     const g = ctx.createLinearGradient(area.left, 0, area.right, 0);
-    g.addColorStop(0, "#22d3ee"); g.addColorStop(0.6, "#8b5cf6"); g.addColorStop(1, "#ec4899");
+    g.addColorStop(0, "#e2c29f"); g.addColorStop(1, "#a0522d");
     return g;
   }
 
   const chartTar = new Chart($("chart-tar"), {
     type: "bar",
-    data: { labels: [], datasets: [{ data: [], borderRadius: 6, borderSkipped: false,
-      backgroundColor: (c) => (c.chart.chartArea ? gradiente(c.chart.ctx, c.chart.chartArea) : "#6366f1") }] },
+    data: { labels: [], datasets: [{ data: [], borderRadius: 4, borderSkipped: false,
+      backgroundColor: (c) => (c.chart.chartArea ? gradiente(c.chart.ctx, c.chart.chartArea) : "#a0522d") }] },
     options: {
       indexAxis: "y", maintainAspectRatio: false, animation: { duration: 600 },
       plugins: { legend: { display: false }, tooltip: tooltipCfg },
       scales: {
-        x: { ticks: { callback: (v) => fmtCompact(v) }, grid: { color: "rgba(148,163,184,0.06)" } },
-        y: { grid: { display: false }, ticks: { color: "#cbd5e1", font: { weight: "600" } } },
+        x: { ticks: { callback: (v) => fmtCompact(v) }, grid: { color: "rgba(90,70,40,0.07)" } },
+        y: { grid: { display: false }, ticks: { color: "#5f574b", font: { weight: "600" } } },
       },
       onClick: (_, els) => { if (els.length) soEsteValor("gru_tar", chartTar.data.labels[els[0].index]); },
       onHover: (e, els) => { e.native.target.style.cursor = els.length ? "pointer" : "default"; },
@@ -307,8 +308,8 @@
 
   const chartTen = new Chart($("chart-ten"), {
     type: "doughnut",
-    data: { labels: [], datasets: [{ data: [], borderWidth: 2, borderColor: "rgba(15,18,32,0.9)", hoverOffset: 8,
-      backgroundColor: ["#22d3ee", "#8b5cf6", "#ec4899", "#f59e0b", "#34d399", "#60a5fa", "#f472b6"] }] },
+    data: { labels: [], datasets: [{ data: [], borderWidth: 2, borderColor: "#fffdf8", hoverOffset: 8,
+      backgroundColor: ["#a0522d", "#d9a05b", "#7d9a78", "#5b7c99", "#a58bb0", "#c9b79c", "#8c6d5a"] }] },
     options: {
       maintainAspectRatio: false, cutout: "68%", animation: { duration: 700 },
       plugins: {
@@ -548,8 +549,8 @@
       : "Selecione 2 ou mais estados (ou municípios) para comparar.";
   }
 
-  const CORES_COMP = ["#22d3ee", "#8b5cf6", "#ec4899", "#f59e0b", "#34d399", "#60a5fa", "#f472b6", "#a3e635",
-    "#fb923c", "#2dd4bf", "#c084fc", "#facc15", "#f87171", "#818cf8", "#4ade80", "#94a3b8"];
+  const CORES_COMP = ["#a0522d", "#d9a05b", "#7d9a78", "#5b7c99", "#a58bb0", "#c9b79c", "#8c6d5a", "#b5838d",
+    "#e07a5f", "#81b29a", "#6d597a", "#e9c46a", "#bc4749", "#3d5a80", "#a7c957", "#9a8c7e"];
   const comp = { dados: null, modo: "pct", charts: {} };
 
   // Barras horizontais empilhadas: uma por local, segmentos = categorias (% do local ou kWh)
@@ -573,7 +574,7 @@
       options: {
         indexAxis: "y", maintainAspectRatio: false, animation: { duration: 500 },
         plugins: {
-          legend: { position: "top", align: "start", labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, color: "#cbd5e1", padding: 12 } },
+          legend: { position: "top", align: "start", labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, color: "#5f574b", padding: 12 } },
           tooltip: {
             ...tooltipCfg, mode: "index", filter: (t) => t.raw > 0,
             callbacks: {
@@ -585,9 +586,9 @@
           },
         },
         scales: {
-          x: { stacked: true, max: pct ? 100 : undefined, grid: { color: "rgba(148,163,184,0.06)" },
+          x: { stacked: true, max: pct ? 100 : undefined, grid: { color: "rgba(90,70,40,0.07)" },
                ticks: { maxTicksLimit: 6, callback: (v) => (pct ? `${v}%` : fmtEnergia(v).replace(/,00 /, " ")) } },
-          y: { stacked: true, grid: { display: false }, ticks: { color: "#cbd5e1", font: { weight: "600" } } },
+          y: { stacked: true, grid: { display: false }, ticks: { color: "#5f574b", font: { weight: "600" } } },
         },
       },
     });
@@ -766,18 +767,18 @@
         labels: r.itens.map((i) => `${nomeLocal(i)} (${i.sigla})`),
         datasets: [
           { type: "bar", label: "Faixa provável (80%)", data: r.itens.map((i) => [Math.max(i.faixa[0], 1), Math.max(i.faixa[1], 1)]),
-            backgroundColor: "hsl(258 90% 66% / .28)", borderColor: "hsl(258 90% 66% / .7)", borderWidth: 1,
+            backgroundColor: "rgba(201,162,126,0.35)", borderColor: "rgba(160,82,45,0.55)", borderWidth: 1,
             borderRadius: 6, borderSkipped: false, barPercentage: 0.55 },
           { type: "line", label: "Consumo previsto", data: r.itens.map((i) => Math.max(i.kwh, 1)), showLine: false,
-            pointRadius: 6, pointHoverRadius: 8, pointBackgroundColor: "#22d3ee", pointBorderColor: "#0f1220", pointBorderWidth: 2 },
+            pointRadius: 6, pointHoverRadius: 8, pointBackgroundColor: "#a0522d", pointBorderColor: "#fffdf8", pointBorderWidth: 2 },
           { type: "line", label: "Nova UC genérica", data: r.itens.map((i) => i.generica), showLine: false,
-            pointStyle: "rectRot", pointRadius: 5, pointBackgroundColor: "transparent", pointBorderColor: "#f59e0b", pointBorderWidth: 2 },
+            pointStyle: "rectRot", pointRadius: 5, pointBackgroundColor: "transparent", pointBorderColor: "#5b7c99", pointBorderWidth: 2 },
         ],
       },
       options: {
         indexAxis: "y", maintainAspectRatio: false, animation: { duration: 500 },
         plugins: {
-          legend: { position: "top", align: "start", labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, color: "#cbd5e1", padding: 12 } },
+          legend: { position: "top", align: "start", labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, color: "#5f574b", padding: 12 } },
           tooltip: {
             ...tooltipCfg,
             callbacks: {
@@ -791,9 +792,9 @@
           },
         },
         scales: {
-          x: { type: "logarithmic", grid: { color: "rgba(148,163,184,0.06)" },
+          x: { type: "logarithmic", grid: { color: "rgba(90,70,40,0.07)" },
                ticks: { maxRotation: 0, autoSkip: false, callback: (v) => (/^[1]0*$/.test(String(v)) ? fmtEnergia(v).replace(/,0+ /, " ") : "") } },
-          y: { grid: { display: false }, ticks: { color: "#cbd5e1", font: { weight: "600" } } },
+          y: { grid: { display: false }, ticks: { color: "#5f574b", font: { weight: "600" } } },
         },
       },
     });
