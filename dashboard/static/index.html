@@ -87,8 +87,39 @@
 
       <section class="filter">
         <div class="filter-row">
-          <label class="filter-label">Grupo tarifário <code>GRU_TAR</code></label>
+          <label class="filter-label">Grupo tarifário <code>GRU_TAR</code>
+            <button class="info-btn" type="button" id="btn-info-tar" aria-expanded="false" aria-controls="info-tar"
+                    title="O que significa cada grupo tarifário">i</button>
+          </label>
           <button class="link" type="button" data-toggle-all="gru_tar">todos</button>
+        </div>
+        <div class="info-pop" id="info-tar" hidden>
+          <div class="info-head">
+            <h4>Grupos tarifários</h4>
+            <button class="info-close" type="button" aria-label="Fechar">×</button>
+          </div>
+          <p class="info-sub">Grupo A: alta e média tensão, com tarifa binômia (demanda + energia).</p>
+          <dl class="info-list">
+            <dt>A1</dt><dd>≥ 230 kV: grandes consumidores industriais ligados à rede básica</dd>
+            <dt>A2</dt><dd>88 a 138 kV: indústrias de grande porte</dd>
+            <dt>A3</dt><dd>69 kV: indústrias e grandes empreendimentos</dd>
+            <dt>A3A</dt><dd>30 a 44 kV: indústrias médias, grandes comércios</dd>
+            <dt>A4</dt><dd>2,3 a 25 kV: indústrias, shoppings, hospitais, universidades, grandes comércios</dd>
+            <dt>AS</dt><dd>&lt; 2,3 kV por rede subterrânea: comércio e serviços em centros urbanos</dd>
+          </dl>
+          <p class="info-sub">Grupo B: baixa tensão, com tarifa monômia (só energia).</p>
+          <dl class="info-list">
+            <dt>B1</dt><dd>Residencial: casas e apartamentos</dd>
+            <dt>B1BR*</dt><dd>Residencial baixa renda (Tarifa Social)</dd>
+            <dt>B2RU*</dt><dd>Rural: agropecuária, propriedades rurais</dd>
+            <dt>B2CO*</dt><dd>Rural, cooperativa de eletrificação rural</dd>
+            <dt>B2SP*</dt><dd>Rural, serviço público de irrigação</dd>
+            <dt>B3</dt><dd>Demais classes: comércio, serviços, pequenas indústrias, poder público</dd>
+            <dt>B4A</dt><dd>Iluminação pública, rede de distribuição</dd>
+            <dt>B4B</dt><dd>Iluminação pública, bulbo da lâmpada</dd>
+            <dt>0 / N/D</dt><dd>Não informado (registro sem grupo tarifário válido)</dd>
+          </dl>
+          <p class="info-foot">Fonte: REN ANEEL nº 1.000/2021. * Interpretado pelo sufixo do código.</p>
         </div>
         <div class="chips" id="chips-gru_tar"></div>
       </section>

@@ -523,6 +523,15 @@
   $("btn-clear-uf").addEventListener("click", () => { state.ufs.clear(); state.muns.clear(); mudouSelecao(); });
   $("btn-clear-mun").addEventListener("click", () => { state.muns.clear(); mudouSelecao(); });
 
+  // Botão "i": painel com o significado de cada grupo tarifário
+  function mostrarInfoTar(abrir) {
+    $("info-tar").hidden = !abrir;
+    $("btn-info-tar").setAttribute("aria-expanded", String(abrir));
+  }
+  $("btn-info-tar").addEventListener("click", (e) => { e.preventDefault(); mostrarInfoTar($("info-tar").hidden); });
+  $("info-tar").querySelector(".info-close").addEventListener("click", () => mostrarInfoTar(false));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("info-tar").hidden) mostrarInfoTar(false); });
+
   $("btn-reset").addEventListener("click", () => {
     state.ufs.clear(); state.muns.clear();
     $("inp-mun").value = "";

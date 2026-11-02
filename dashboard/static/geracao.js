@@ -661,6 +661,16 @@
       montarChips("tipo", meta.tipos, (t) => t.sigla, true);
       montarChips("sistema", meta.sistemas, (s) => NOMES_SISTEMA[s] || s);
       montarChips("comerc", meta.comercs);
+      // Significado das siglas também no tooltip de cada chip
+      const DICAS = {
+        "Sistema Interligado Nacional": "Sistema Interligado Nacional",
+        "Sistemas Isolados": "Sistemas não conectados ao SIN",
+        "ACR": "Ambiente de Contratação Regulada",
+        "Fora do ACR": "Energia não comercializada no Ambiente de Contratação Regulada",
+      };
+      document.querySelectorAll("#chips-sistema .chip, #chips-comerc .chip").forEach((b) => {
+        if (DICAS[b.dataset.valor]) b.title = DICAS[b.dataset.valor];
+      });
       $("legend-tipos").innerHTML = meta.tipos.map((t) =>
         `<span><i class="dot" style="background:${cor(t.sigla)}"></i>${t.nome}</span>`).join("");
 
