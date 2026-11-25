@@ -19,6 +19,8 @@ Desktop.ini
 
 # Cache agregado gerado pelo painel (dashboard/server.py)
 dashboard/cache/
+# Pasta do container montada por deploy/publicar.py
+deploy/app/
 # Modelos treinados (gerados por comparar_modelos_ml.py; podem ter centenas de MB)
 modelagem/resultados/modelos/
 # Logs automáticos de treino do CatBoost (gerados ao rodar os scripts a partir de modelagem/)

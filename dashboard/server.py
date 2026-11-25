@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import os
 import sys
 import threading
 import time
@@ -169,7 +170,11 @@ def _agregar_fonte(sigla: str, arquivo: Path) -> pl.DataFrame:
 def construir_cache(forcar: bool = False) -> None:
     fontes_existentes = {s: DATA_DIR / f for s, (_, f) in FONTES.items() if (DATA_DIR / f).exists()}
     if not fontes_existentes:
-        raise FileNotFoundError(f"Nenhuma base encontrada em {DATA_DIR}")
+        # Implantação (ex.: Hugging Face): só as estruturas prontas são enviadas, sem as bases brutas
+        if _preparado_existente():
+            print("[cache] Bases brutas ausentes — usando as estruturas prontas de cache/preparado/")
+            return
+        raise FileNotFoundError(f"Nenhuma base encontrada em {DATA_DIR} nem cache em {PREP_DIR}")
 
     if CACHE_FILE.exists() and not forcar:
         mtime_cache = CACHE_FILE.stat().st_mtime
@@ -291,6 +296,17 @@ def preparar_estruturas() -> None:
     }
     (PREP_DIR / "info.json").write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
     print(f"[cache] Estruturas gravadas em {PREP_DIR} ({time.time() - t0:.1f}s)")
+
+
+def _preparado_existente() -> bool:
+    """Estruturas de consulta completas e na versão atual (sem exigir o agregado.parquet)."""
+    arq = PREP_DIR / "info.json"
+    if not arq.exists():
+        return False
+    info = json.loads(arq.read_text(encoding="utf-8"))
+    arquivos = ["cubo.parquet", "base.parquet", *(f"z{z}.parquet" for z in ZOOM_PIRAMIDE)]
+    return (info.get("versao") == VERSAO_PREP and info.get("zooms") == list(ZOOM_PIRAMIDE)
+            and all((PREP_DIR / a).exists() for a in arquivos))
 
 
 def _preparado_valido() -> bool:
@@ -584,7 +600,9 @@ def aquecer() -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Painel de consumo energético (BDGD)")
-    ap.add_argument("--port", type=int, default=8050)
+    ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8050)))
+    ap.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"),
+                    help="endereço de escuta (0.0.0.0 para publicar, ex.: Hugging Face/Docker)")
     ap.add_argument("--rebuild", action="store_true", help="reconstrói o cache agregado")
     ap.add_argument("--no-browser", action="store_true", help="não abre o navegador")
     ap.add_argument("--sem-previsao", action="store_true",
@@ -599,7 +617,7 @@ def main() -> None:
     aquecer()
 
     url = f"http://localhost:{args.port}"
-    servidor = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    servidor = ThreadingHTTPServer((args.host, args.port), Handler)
     print("=" * 70)
     print(f" Painel disponível em {url}   (Ctrl+C para encerrar)")
     print("=" * 70)
