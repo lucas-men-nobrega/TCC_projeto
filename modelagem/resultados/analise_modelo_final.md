@@ -29,7 +29,7 @@ Ablação sobre o RF lat/lon (R² base de 0,154):
 | IBGE | +0,035 | não no geral, mas melhora o MdAPE (p = 0,013) e o R² de MT (+0,08, 14/15 folds) |
 | todos | +0,422 | sim |
 
-O modelo "todos" ainda supera o "perfil" sozinho em 15/15 folds (+0,07 de R²). Ou seja, rede, IBGE e geração somam informação de forma complementar, mesmo que isoladamente sejam fracos. A interpretabilidade anterior aponta na mesma direção: na permutação, perfil = 1,28, rede = 0,43, posição = 0,08 e geração/IBGE ≈ 0.
+O modelo "todos" ainda supera o "perfil" sozinho em 15/15 folds (+0,07 de R²). Ou seja, rede, IBGE e geração somam informação de forma complementar, mesmo que isoladamente sejam fracos. A interpretabilidade do modelo final (ver seção 6) aponta na mesma direção: na permutação, perfil = 1,41, rede = 0,52, tensão/tarifa = 0,24, posição = 0,17 e geração/IBGE ≈ 0.
 
 ### 3. Desempenho por grupo de tensão
 
@@ -45,6 +45,27 @@ Um MAE_log de 0,91 equivale a errar, tipicamente, por um fator de cerca de 2,5×
 ### 5. Os modelos geoestatísticos ficaram abaixo dos de ML
 
 Krigagem (R² ≈ 0), GWR (R² negativo, só 7 de 15 folds concluídos) e kNN (baseline) ficaram atrás. O consumo de uma UC é dominado por atributos próprios, e a autocorrelação espacial explica pouco. O XGBoost foi o mais instável (dp 0,31), provavelmente por falta de tuning.
+
+### 6. Interpretabilidade do modelo final (rodada de 25/11/2026)
+
+O `explicar_modelos.py` foi rodado de novo com a mesma configuração da rodada final: 121.884 UCs, 50 blocos K-means, 400 árvores e alvo anualizado. Os 5 folds são os da 1ª repetição da comparação. Resultados em `explicacao/`.
+
+- **Permutação por grupo (aumento do RMSE_log), RF + todos:**
+
+  | grupo | aumento do erro |
+  |---|---|
+  | perfil | 1,41 ± 0,18 |
+  | rede | 0,52 ± 0,20 |
+  | tensão/tarifa | 0,24 |
+  | posição | 0,17 |
+  | IBGE | 0,009 |
+  | geração | 0,003 |
+
+  O LightGBM + todos tem a mesma ordem. Isso confirma a ablação: o modelo depende do perfil declarado e da rede.
+- **SHAP, Tarefa 1 (LightGBM + todos):** as principais variáveis são TE_GRU_TEN, a demanda contratada, a carga instalada, TE_FAS_CON, TE_DIST e LIV. Na Tarefa 2 (CatBoost, log-odds de MT), predominam a distância (LOG_DIST_1_KM), a composição da vizinhança (KNN_P_MT e KNN_P_BT) e a participação da indústria no VA do município.
+- **R² fora da amostra por grupo de tensão:** MT = 0,58, BT = 0,45 e AT = 0,18. Os valores de MT e BT coincidem com os da comparação (0,58 e 0,46). O AT continua instável e tem viés alto (+0,76 em log, ou seja, o modelo subestima o consumo dessas UCs).
+- **R² por região:** vai de 0,41 no Sul a 0,69 no Sudeste. O viés é pequeno e positivo em todas as regiões (0,07–0,10).
+- **Resíduos no espaço:** o I de Moran dos resíduos médios por município é de **0,26** (p = 0,002). Na versão em modo rápido era 0,34. Ainda sobra estrutura espacial não explicada, e as distribuidoras variam de R² 0,32 a 0,87. Uma variável regional adicional, como um efeito da distribuidora ou do município, poderia reduzir esse resíduo.
 
 ### Ressalva: o modelo regional
 
@@ -81,7 +102,7 @@ Eles são candidatos melhores para o mapa regional do que um modelo que só repr
 
 - Os rankings de consumo e de expansão são descritivos e não mudaram em relação à rodada anterior.
 - **Não compare diretamente com a rodada anterior.** O RF base caiu de R² 0,22 para 0,15 porque mudaram o protocolo (5 folds × 3 repetições) e o alvo (agora anualizado). O ganho real vem da ablação dentro da mesma rodada.
-- **Interpretabilidade desatualizada:** a pasta `explicacao/` é de 15/10, rodada no modo rápido (3 folds, 32 mil UCs). Rodar de novo o `explicar_modelos.py` no modo completo, para que SHAP, resíduos e importâncias correspondam ao modelo final.
+- **Interpretabilidade atualizada (25/11/2026):** a pasta `explicacao/` foi refeita no modo completo, com o mesmo protocolo do modelo final (seção 6). Ela substitui a versão de 15/10, rodada no modo rápido (3 folds, 32 mil UCs, 150 árvores). As partes B (expansão) e C (composição) não dependem dessa configuração e ficaram iguais.
 - **Importâncias do modelo errado:** o `importancia_features_tarefa1.csv` se refere ao modelo **regional** (RF + geração), não ao final. Por isso aparecem LAT/LON no topo e nenhuma variável de perfil.
 
 ## Resumo

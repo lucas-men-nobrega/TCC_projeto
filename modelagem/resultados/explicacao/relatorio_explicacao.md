@@ -3,74 +3,74 @@
 Por que os modelos preveem o que preveem: importância por grupo (permutação fora da amostra), SHAP nativo, dependência parcial, resíduos no espaço e coeficientes.
 
 ## A. Tarefas 1 e 2 por UC
-Amostra estratificada de 32.042 UCs. 3 folds espaciais (configuração do modo rápido).
+Amostra estratificada de 121.884 UCs. 5 folds espaciais (50 blocos K-means). 400 árvores · alvo anualizado · mesma configuração da rodada final (folds = 1ª repetição da comparação).
 
 ### Importância por grupo (permutação nos folds de teste)
 Aumento médio do erro ao embaralhar juntas as colunas do grupo. Grupos correlacionados (ex.: perfil e grupo de tensão) dividem a informação: a importância de cada um é o que só ele traz.
 
 | tarefa | modelo | grupo | aumento_erro | aumento_erro_dp |
 |---|---|---|---|---|
-| 1 · consumo | LightGBM (feat. espaciais) + todos | Geração (usinas no entorno) | 0,0027 | 0,0010 |
-| 1 · consumo | LightGBM (feat. espaciais) + todos | Grupo de tensão e tarifa | 0,3576 | 0,1200 |
-| 1 · consumo | LightGBM (feat. espaciais) + todos | IBGE (município) | 0,0038 | 0,0121 |
-| 1 · consumo | LightGBM (feat. espaciais) + todos | Perfil declarado da UC | 1,2721 | 0,0961 |
-| 1 · consumo | LightGBM (feat. espaciais) + todos | Posição (lat/lon e rotações) | 0,0828 | 0,0284 |
-| 1 · consumo | LightGBM (feat. espaciais) + todos | Rede (distribuidora e conjunto) | 0,3714 | 0,0166 |
-| 1 · consumo | LightGBM (feat. espaciais) + todos | Vizinhança (lags kNN e densidade) | 0,0131 | 0,0078 |
-| 1 · consumo | Random Forest padrão (lat/lon) + todos | Geração (usinas no entorno) | 0,0031 | 0,0036 |
-| 1 · consumo | Random Forest padrão (lat/lon) + todos | Grupo de tensão e tarifa | 0,2984 | 0,0697 |
-| 1 · consumo | Random Forest padrão (lat/lon) + todos | IBGE (município) | 0,0128 | 0,0091 |
-| 1 · consumo | Random Forest padrão (lat/lon) + todos | Perfil declarado da UC | 1,2755 | 0,0767 |
-| 1 · consumo | Random Forest padrão (lat/lon) + todos | Posição (lat/lon e rotações) | 0,0792 | 0,0657 |
-| 1 · consumo | Random Forest padrão (lat/lon) + todos | Rede (distribuidora e conjunto) | 0,4331 | 0,0379 |
-| 2 · GRU_TEN | CatBoost (feat. espaciais) + todos | Geração (usinas no entorno) | 0,0018 | 0,0016 |
-| 2 · GRU_TEN | CatBoost (feat. espaciais) + todos | IBGE (município) | 0,0072 | 0,0020 |
-| 2 · GRU_TEN | CatBoost (feat. espaciais) + todos | Posição (lat/lon e rotações) | 0,0030 | 0,0017 |
-| 2 · GRU_TEN | CatBoost (feat. espaciais) + todos | Rede (distribuidora e conjunto) | 0,0107 | 0,0043 |
-| 2 · GRU_TEN | CatBoost (feat. espaciais) + todos | Vizinhança (lags kNN e densidade) | 0,0043 | 0,0010 |
+| 1 · consumo | LightGBM (feat. espaciais) + todos | Geração (usinas no entorno) | 0,0051 | 0,0028 |
+| 1 · consumo | LightGBM (feat. espaciais) + todos | Grupo de tensão e tarifa | 0,3597 | 0,0970 |
+| 1 · consumo | LightGBM (feat. espaciais) + todos | IBGE (município) | 0,0058 | 0,0044 |
+| 1 · consumo | LightGBM (feat. espaciais) + todos | Perfil declarado da UC | 1,3399 | 0,1094 |
+| 1 · consumo | LightGBM (feat. espaciais) + todos | Posição (lat/lon e rotações) | 0,2276 | 0,1780 |
+| 1 · consumo | LightGBM (feat. espaciais) + todos | Rede (distribuidora e conjunto) | 0,4662 | 0,1852 |
+| 1 · consumo | LightGBM (feat. espaciais) + todos | Vizinhança (lags kNN e densidade) | 0,0085 | 0,0044 |
+| 1 · consumo | Random Forest padrão (lat/lon) + todos | Geração (usinas no entorno) | 0,0026 | 0,0020 |
+| 1 · consumo | Random Forest padrão (lat/lon) + todos | Grupo de tensão e tarifa | 0,2408 | 0,0557 |
+| 1 · consumo | Random Forest padrão (lat/lon) + todos | IBGE (município) | 0,0092 | 0,0080 |
+| 1 · consumo | Random Forest padrão (lat/lon) + todos | Perfil declarado da UC | 1,4097 | 0,1807 |
+| 1 · consumo | Random Forest padrão (lat/lon) + todos | Posição (lat/lon e rotações) | 0,1737 | 0,1214 |
+| 1 · consumo | Random Forest padrão (lat/lon) + todos | Rede (distribuidora e conjunto) | 0,5225 | 0,1992 |
+| 2 · GRU_TEN | CatBoost (feat. espaciais) + todos | Geração (usinas no entorno) | 0,0012 | 0,0013 |
+| 2 · GRU_TEN | CatBoost (feat. espaciais) + todos | IBGE (município) | 0,0031 | 0,0026 |
+| 2 · GRU_TEN | CatBoost (feat. espaciais) + todos | Posição (lat/lon e rotações) | -0,0001 | 0,0028 |
+| 2 · GRU_TEN | CatBoost (feat. espaciais) + todos | Rede (distribuidora e conjunto) | 0,0153 | 0,0124 |
+| 2 · GRU_TEN | CatBoost (feat. espaciais) + todos | Vizinhança (lags kNN e densidade) | 0,0076 | 0,0075 |
 
 Gráficos: `importancia_grupos_*.png`.
 
 ### SHAP (nativo)
-- Tarefa 1 · LightGBM + todos — variáveis com maior |SHAP| médio: TE_GRU_TEN, LOG_DEM_CONT, LOG_CAR_INST, TE_FAS_CON, TE_TEN_FORN, TE_DIST (`shap_t1_lightgbm.png`).
-- Tarefa 2 · CatBoost + todos, log-odds de MT — LOG_DIST_1_KM, KNN_P_BT, KNN_P_MT, REDE_P_BT, REDE_P_MT, IBGE_URBANIZACAO (`shap_t2_catboost_mt.png`).
+- Tarefa 1 · LightGBM + todos — variáveis com maior |SHAP| médio: TE_GRU_TEN, LOG_DEM_CONT, LOG_CAR_INST, TE_FAS_CON, TE_DIST, LIV (`shap_t1_lightgbm.png`).
+- Tarefa 2 · CatBoost + todos, log-odds de MT — LOG_DIST_1_KM, KNN_P_MT, KNN_P_BT, LOG_DIST_K_KM, IBGE_PART_INDUSTRIA, REDE_P_MT (`shap_t2_catboost_mt.png`).
 - O RF (melhor da tarefa 1) não tem SHAP nativo; é explicado pela permutação e pela dependência parcial.
 
 ### Dependência parcial — Tarefa 1, RF + todos (`dependencia_parcial_t1_rf.png`)
 Consumo médio previsto quando uma variável é fixada em cada valor e as demais seguem como observadas (demanda contratada só nas UCs de MT; carga instalada só nas de BT).
 
 ### Onde o modelo erra — resíduos fora da amostra (RF + todos)
-- I de Moran dos resíduos médios por município (vizinhança 8-NN): **0.341** (p = 0.002). Valor positivo e significativo = sobra estrutura espacial não explicada (falta variável regional); próximo de zero = os erros não se agrupam no espaço. Mapa: `residuos_mapa_t1.png`.
+- I de Moran dos resíduos médios por município (vizinhança 8-NN): **0,261** (p = 0,002). Valor positivo e significativo = sobra estrutura espacial não explicada (falta variável regional); próximo de zero = os erros não se agrupam no espaço. Mapa: `residuos_mapa_t1.png`.
 
 | REGIAO | n_UC | R2_log | vies_log |
 |---|---|---|---|
-| Centro-Oeste | 2.475,0000 | 0,3913 | 0,0733 |
-| N/D | 6,0000 | 0,2283 | -1,5232 |
-| Nordeste | 7.594,0000 | 0,3424 | 0,2371 |
-| Norte | 2.261,0000 | 0,4923 | 0,1438 |
-| Sudeste | 11.574,0000 | 0,6472 | 0,0553 |
-| Sul | 8.132,0000 | 0,3673 | -0,0083 |
+| Centro-Oeste | 9.426,0000 | 0,4475 | 0,0841 |
+| N/D | 16,0000 | 0,5009 | -0,4619 |
+| Nordeste | 28.760,0000 | 0,4820 | 0,0684 |
+| Norte | 8.974,0000 | 0,5895 | 0,0950 |
+| Sudeste | 42.847,0000 | 0,6911 | 0,0883 |
+| Sul | 31.861,0000 | 0,4087 | 0,0926 |
 
 | GRU_TEN | n_UC | R2_log | vies_log |
 |---|---|---|---|
-| AT | 1.769,0000 | 0,1937 | 0,5395 |
-| BT | 15.109,0000 | 0,3852 | 0,0926 |
-| MT | 15.164,0000 | 0,4701 | -0,0368 |
+| AT | 1.769,0000 | 0,1844 | 0,7643 |
+| BT | 59.933,0000 | 0,4515 | 0,0862 |
+| MT | 60.182,0000 | 0,5787 | 0,0554 |
 
 Distribuidoras com mais UCs na amostra (pior → melhor R²):
 
 | DIST | n_UC | R2_log | vies_log |
 |---|---|---|---|
-| 2866 | 3.217,0000 | 0,2423 | -0,0603 |
-| 405 | 1.359,0000 | 0,2999 | 0,0632 |
-| 47 | 2.714,0000 | 0,3333 | 0,0688 |
-| 43 | 1.672,0000 | 0,3780 | 0,2978 |
-| 396 | 2.405,0000 | 0,3948 | 0,0253 |
-| 63 | 2.487,0000 | 0,4948 | 0,0432 |
-| 385 | 1.069,0000 | 0,5134 | -0,3942 |
-| 5697 | 1.279,0000 | 0,7244 | 0,4623 |
-| 4950 | 2.306,0000 | 0,8398 | 0,0164 |
-| 390 | 1.042,0000 | 0,8487 | -0,3519 |
+| 2866 | 12.920,0000 | 0,3238 | 0,0548 |
+| 405 | 5.226,0000 | 0,3271 | 0,0547 |
+| 47 | 10.451,0000 | 0,3832 | 0,1401 |
+| 396 | 9.055,0000 | 0,3847 | 0,1700 |
+| 43 | 6.078,0000 | 0,4720 | -0,0305 |
+| 385 | 3.855,0000 | 0,5799 | -0,0783 |
+| 63 | 9.227,0000 | 0,6484 | 0,0296 |
+| 5697 | 4.967,0000 | 0,7922 | 0,1739 |
+| 390 | 3.472,0000 | 0,8689 | -0,1707 |
+| 4950 | 8.548,0000 | 0,8706 | 0,0448 |
 
 ## B. Tarefa 3 — expansão da geração
 RF + IBGE 2010 treinado em T=2015; AUC-PR no teste temporal (T=2020) = 0.337.

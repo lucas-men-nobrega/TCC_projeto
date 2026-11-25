@@ -2,7 +2,7 @@
 Interpretabilidade dos modelos (Fase 4) — por que os modelos preveem o que preveem.
 
 Partes (--partes, padrão A,B,C):
-  A — Tarefas 1 e 2 por UC (pipeline de comparar_modelos_ml, configuração do modo rápido):
+  A — Tarefas 1 e 2 por UC (pipeline de comparar_modelos_ml, mesma configuração da rodada final):
       • importância por GRUPO de variáveis por permutação, nos folds de teste da CV espacial
         (permuta juntas as colunas do grupo e mede quanto a métrica piora — não sofre o viés da
         importância por impureza a favor de variáveis contínuas);
@@ -17,7 +17,8 @@ Partes (--partes, padrão A,B,C):
       de MT e de AT em relação à BT por +1 desvio-padrão de cada variável).
 
 Saída: modelagem/resultados/explicacao/ (relatorio_explicacao.md, CSVs e PNGs).
-Uso: python modelagem/explicar_modelos.py [--partes A,B,C] [--n-por-classe 15000] [--folds 3]
+Uso: python modelagem/explicar_modelos.py [--partes A,B,C] [--rapido]
+     (padrão = rodada final: --n-por-classe 60000 --folds 5 --n-blocos 50 --n-arvores 400)
 """
 from __future__ import annotations
 
@@ -151,9 +152,11 @@ def moran(valores: np.ndarray, coords: np.ndarray, k: int = 8, n_perm: int = 499
 # --------------------------------------------------------------------------- #
 def parte_a(args) -> list[str]:
     print("\n[A] Tarefas 1 e 2 por UC — amostra, folds e modelos...")
-    a = SimpleNamespace(n_arvores=150, seed=SEED, sem_gwr=True, sem_gp=True, n_gwr=0, n_gp=0, k=15,
-                        grupos=set(cm.SUFIXOS_GRUPO), tipo_bloco="kmeans", n_blocos=30, folds=args.folds,
-                        repeticoes=1, cv_aleatoria=False)
+    # Mesmo protocolo da rodada final do comparar_modelos_ml (seed, blocos K-means, árvores): com a
+    # configuração padrão, os folds aqui são idênticos aos da 1ª repetição daquela rodada
+    a = SimpleNamespace(n_arvores=args.n_arvores, seed=SEED, sem_gwr=True, sem_gp=True, n_gwr=0, n_gp=0, k=15,
+                        grupos=set(cm.SUFIXOS_GRUPO), tipo_bloco="kmeans", n_blocos=args.n_blocos,
+                        folds=args.folds, repeticoes=1, cv_aleatoria=False)
     lf_base, _ = cm.carregar_bases(False)
     lf_modelo = lf_base.filter(pl.col("_GEO") & pl.col("_COORD_UC") & (pl.col("ENE") > 0)
                                & (pl.col("GRU_TEN") != cm.NA))
@@ -297,7 +300,10 @@ def parte_a(args) -> list[str]:
     top_shap = lambda t: ", ".join(shap_tab[shap_tab["tarefa"] == t].head(6)["variavel"])
     return [
         "## A. Tarefas 1 e 2 por UC",
-        f"Amostra estratificada de {len(df):,} UCs, {len(folds)} folds espaciais (configuração do modo rápido).".replace(",", "."),
+        (f"Amostra estratificada de {len(df):,} UCs, {len(folds)} folds espaciais "
+         f"({a.n_blocos} blocos K-means), {a.n_arvores} árvores · alvo anualizado · "
+         + ("configuração do modo rápido." if args.rapido else
+            "mesma configuração da rodada final (folds = 1ª repetição da comparação).")).replace(",", "."),
         "",
         "### Importância por grupo (permutação nos folds de teste)",
         "Aumento médio do erro ao embaralhar juntas as colunas do grupo. Grupos correlacionados (ex.: perfil e "
@@ -428,9 +434,16 @@ def parte_c(args) -> list[str]:
 def main():
     ap = argparse.ArgumentParser(description="Interpretabilidade dos modelos (Fase 4)")
     ap.add_argument("--partes", default="A,B,C")
-    ap.add_argument("--n-por-classe", type=int, default=15_000)
-    ap.add_argument("--folds", type=int, default=3)
+    # Padrões = rodada final do comparar_modelos_ml (60 mil/classe, 5 folds, 50 blocos, 400 árvores)
+    ap.add_argument("--n-por-classe", type=int, default=60_000)
+    ap.add_argument("--folds", type=int, default=5)
+    ap.add_argument("--n-blocos", type=int, default=50, help="clusters K-means p/ Spatial Block CV")
+    ap.add_argument("--n-arvores", type=int, default=400)
+    ap.add_argument("--rapido", action="store_true",
+                    help="modo de teste rápido (15 mil/classe, 3 folds, 30 blocos, 150 árvores)")
     args = ap.parse_args()
+    if args.rapido:
+        args.n_por_classe, args.folds, args.n_blocos, args.n_arvores = 15_000, 3, 30, 150
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     partes = {p.strip().upper() for p in args.partes.split(",")}

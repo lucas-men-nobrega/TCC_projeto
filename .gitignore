@@ -21,3 +21,5 @@ Desktop.ini
 dashboard/cache/
 # Modelos treinados (gerados por comparar_modelos_ml.py; podem ter centenas de MB)
 modelagem/resultados/modelos/
+# Logs automáticos de treino do CatBoost (gerados ao rodar os scripts a partir de modelagem/)
+modelagem/catboost_info/
